@@ -1,0 +1,319 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Master Gate: Global Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation Blueprints
+    function isValidVaultRecord(data) {
+      return data.keys().hasAll(['user_id', 'memories', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'memories', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.memories is list &&
+             data.updated_at is string;
+    }
+
+    function isValidFocusRecord(data) {
+      return data.keys().hasAll(['user_id', 'settings', 'tasks', 'goals', 'session_history', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'settings', 'tasks', 'goals', 'session_history', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.settings is map &&
+             data.tasks is list &&
+             data.goals is map &&
+             data.session_history is list &&
+             data.updated_at is string;
+    }
+
+    function isValidRemoteRecord(data) {
+      return data.keys().hasAll(['user_id', 'devices', 'active_device_id', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'devices', 'active_device_id', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.devices is list &&
+             data.active_device_id is string &&
+             data.updated_at is string;
+    }
+
+    function isValidClockSettings(data) {
+      return data.keys().hasAll(['user_id', 'theme', 'clock_style', 'format_24h', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'theme', 'clock_style', 'format_24h', 'timezone', 'world_clocks', 'alarms', 'routines', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.theme in ['light', 'dark', 'system'] &&
+             data.clock_style in ['minimal', 'digital', 'analog', 'neon', 'elegant'] &&
+             data.format_24h is bool &&
+             data.updated_at is string;
+    }
+
+    function isValidCalendarEvent(data) {
+      return data.keys().hasAll(['user_id', 'title', 'date', 'created_at']) &&
+             data.keys().hasOnly(['user_id', 'title', 'date', 'start_time', 'end_time', 'is_all_day', 'category', 'description', 'location', 'recurrence', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.title is string && data.title.size() <= 200 &&
+             data.date is string &&
+             data.created_at is string;
+    }
+
+    function isValidPlannerTask(data) {
+      return data.keys().hasAll(['user_id', 'title', 'priority', 'completed', 'created_at']) &&
+             data.keys().hasOnly(['user_id', 'title', 'description', 'due_date', 'priority', 'category', 'completed', 'estimate', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.title is string && data.title.size() <= 200 &&
+             data.priority in ['low', 'medium', 'high'] &&
+             data.completed is bool &&
+             data.created_at is string;
+    }
+
+    function isValidJournalNote(data) {
+      return data.keys().hasAll(['user_id', 'date', 'content', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'date', 'content', 'reflection', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.date is string &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.updated_at is string;
+    }
+
+    function isValidMapSettings(data) {
+      return data.keys().hasAll(['user_id', 'theme', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'theme', 'default_center', 'default_zoom', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.theme in ['light', 'dark', 'emerald'] &&
+             data.updated_at is string;
+    }
+
+    function isValidMapPlace(data) {
+      return data.keys().hasAll(['user_id', 'name', 'lat', 'lng', 'created_at']) &&
+             data.keys().hasOnly(['user_id', 'name', 'address', 'lat', 'lng', 'category', 'notes', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.name is string && data.name.size() <= 200 &&
+             data.lat is number &&
+             data.lng is number &&
+             data.created_at is string;
+    }
+
+    function isValidMapTrip(data) {
+      return data.keys().hasAll(['user_id', 'title', 'waypoints', 'created_at']) &&
+             data.keys().hasOnly(['user_id', 'title', 'description', 'waypoints', 'distance', 'duration', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.title is string && data.title.size() <= 200 &&
+             data.waypoints is list &&
+             data.created_at is string;
+    }
+
+    function isValidWhatsAppUser(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email']) &&
+             data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'statusText', 'lastSeen', 'isOnline']) &&
+             data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.email is string && data.email.size() <= 150;
+    }
+
+
+    function isValidWhatsAppConversation(data) {
+      return data.keys().hasAll(['id', 'participants', 'participantData', 'updatedAt']) &&
+             data.keys().hasOnly(['id', 'participants', 'participantData', 'lastMessage', 'lastMessageTimestamp', 'unreadCount', 'updatedAt']) &&
+             data.participants is list && data.participants.size() <= 10 &&
+             data.participants.hasAny([request.auth.uid]) &&
+             data.participantData is map &&
+             data.updatedAt is string;
+    }
+
+    function isValidCameraPhoto(data) {
+      return data.keys().hasAll(['userId', 'name', 'url', 'createdAt']) &&
+             data.keys().hasOnly(['id', 'userId', 'name', 'url', 'createdAt', 'size', 'type', 'width', 'height', 'filters']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() <= 255 &&
+             data.url is string && data.url.size() <= 2000 &&
+             data.createdAt is string &&
+             (data.get('filters', null) == null || data.filters is map);
+    }
+
+    function isValidWhatsAppMessage(data) {
+      return data.keys().hasAll(['conversationId', 'senderId', 'senderName', 'text', 'timestamp', 'type']) &&
+             data.keys().hasOnly(['conversationId', 'senderId', 'senderName', 'text', 'timestamp', 'type', 'mediaUrl', 'fileName', 'replyTo', 'reactions', 'isDeleted', 'isEdited', 'readBy']) &&
+             data.senderId == request.auth.uid &&
+             data.text is string && data.text.size() <= 5000 &&
+             data.type in ['text', 'image', 'file', 'audio', 'video'];
+    }
+
+    // Collection Security
+    match /user_vault_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidVaultRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_focus_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidFocusRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_remote_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidRemoteRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_clock_settings/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidClockSettings(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_clock_records/{userId} {
+      allow read: if isOwner(userId);
+      
+      match /calendar_events/{eventId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidCalendarEvent(incoming()));
+      }
+      
+      match /planner_tasks/{taskId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidPlannerTask(incoming()));
+      }
+      
+      match /journal_notes/{noteId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidJournalNote(incoming()));
+      }
+    }
+
+    match /user_map_settings/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidMapSettings(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_map_records/{userId} {
+      allow read: if isOwner(userId);
+
+      match /saved_places/{placeId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidMapPlace(incoming()));
+      }
+
+      match /trips/{tripId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidMapTrip(incoming()));
+      }
+    }
+
+    // WhatsApp Security Rules
+    match /whatsapp_users/{userId} {
+      allow read: if isSignedIn();
+      allow create, update: if isOwner(userId) && isValidWhatsAppUser(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /whatsapp_conversations/{conversationId} {
+      allow list: if isSignedIn() && resource.data.participants.hasAny([request.auth.uid]);
+      allow get: if isSignedIn() && resource.data.participants.hasAny([request.auth.uid]);
+      allow create: if isSignedIn() && isValidWhatsAppConversation(incoming());
+      allow update: if isSignedIn() && resource.data.participants.hasAny([request.auth.uid]);
+      allow delete: if isSignedIn() && resource.data.participants.hasAny([request.auth.uid]);
+
+      match /messages/{messageId} {
+        allow list, get: if isSignedIn() && get(/databases/$(database)/documents/whatsapp_conversations/$(conversationId)).data.participants.hasAny([request.auth.uid]);
+        allow create: if isSignedIn() && isValidWhatsAppMessage(incoming()) && get(/databases/$(database)/documents/whatsapp_conversations/$(conversationId)).data.participants.hasAny([request.auth.uid]);
+        allow update, delete: if isSignedIn() && resource.data.senderId == request.auth.uid;
+      }
+    }
+
+    match /whatsapp_calls/{callId} {
+      allow read: if isSignedIn() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().callerId == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+    }
+
+    function isValidWhiteboard(data) {
+      return data.keys().hasAll(['userId', 'title']) &&
+             data.keys().hasOnly(['id', 'userId', 'title', 'preview', 'data', 'createdAt', 'updatedAt']) &&
+             data.userId == request.auth.uid &&
+             data.title is string && data.title.size() <= 200 &&
+             (data.get('preview', null) == null || (data.preview is string && data.preview.size() <= 200000)) &&
+             (data.get('data', null) == null || data.data is map);
+    }
+
+    function isValidWeatherRecord(data) {
+      return data.keys().hasAll(['user_id', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'favorite_locations', 'recent_locations', 'units', 'widget_config', 'notification_settings', 'comparison_locations', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.updated_at is string &&
+             (data.get('favorite_locations', null) == null || data.favorite_locations is list) &&
+             (data.get('recent_locations', null) == null || data.recent_locations is list) &&
+             (data.get('units', null) == null || data.units is map) &&
+             (data.get('widget_config', null) == null || data.widget_config is map) &&
+             (data.get('notification_settings', null) == null || data.notification_settings is map) &&
+             (data.get('comparison_locations', null) == null || data.comparison_locations is list);
+    }
+
+    function isValidHoloSettings(data) {
+      return data.keys().hasAll(['user_id', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'model_id', 'environment_id', 'avatar_scale', 'voice_id', 'voice_pitch', 'voice_speed', 'voice_gender', 'animation_intensity', 'reduced_motion', 'show_floating_hud', 'theme', 'conversation_history', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.updated_at is string &&
+             (data.get('model_id', null) == null || data.model_id is string) &&
+             (data.get('environment_id', null) == null || data.environment_id is string) &&
+             (data.get('avatar_scale', null) == null || data.avatar_scale is number) &&
+             (data.get('voice_id', null) == null || data.voice_id is string) &&
+             (data.get('voice_pitch', null) == null || data.voice_pitch is number) &&
+             (data.get('voice_speed', null) == null || data.voice_speed is number) &&
+             (data.get('voice_gender', null) == null || data.voice_gender is string) &&
+             (data.get('animation_intensity', null) == null || data.animation_intensity is number) &&
+             (data.get('reduced_motion', null) == null || data.reduced_motion is bool) &&
+             (data.get('show_floating_hud', null) == null || data.show_floating_hud is bool) &&
+             (data.get('theme', null) == null || data.theme in ['dark', 'light']) &&
+             (data.get('conversation_history', null) == null || data.conversation_history is list);
+    }
+
+    match /user_weather_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidWeatherRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_holo_settings/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidHoloSettings(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /camera_photos/{photoId} {
+      allow list, get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidCameraPhoto(incoming());
+      allow update: if isSignedIn() && isOwner(resource.data.userId) && isValidCameraPhoto(incoming());
+      allow delete: if isSignedIn() && isOwner(resource.data.userId);
+    }
+
+    match /whiteboards/{boardId} {
+      allow list, get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidWhiteboard(incoming());
+      allow update: if isSignedIn() && isOwner(resource.data.userId) && isValidWhiteboard(incoming());
+      allow delete: if isSignedIn() && isOwner(resource.data.userId);
+    }
+
+  }
+}

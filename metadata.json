@@ -1,0 +1,12 @@
+{
+  "name": "Remix ishai",
+  "description": "Operational terminal dashboard with cyber telemetry, command tools, and interactive utilities inspired by Ishaan OS.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

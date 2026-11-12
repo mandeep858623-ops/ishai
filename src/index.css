@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  
+  code, pre {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(150, 150, 150, 0.2);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 150, 150, 0.4);
+}
+
+/* Markdown prose enhancements */
+.superai-prose h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.superai-prose h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.superai-prose h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.superai-prose p {
+  margin-bottom: 0.75rem;
+  line-height: 1.65;
+}
+
+.superai-prose ul {
+  list-style-type: disc;
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.superai-prose ol {
+  list-style-type: decimal;
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.superai-prose li {
+  margin-bottom: 0.25rem;
+  line-height: 1.6;
+}
+
+.superai-prose blockquote {
+  border-left: 3px solid rgba(99, 102, 241, 0.4);
+  padding-left: 1rem;
+  margin: 0.75rem 0;
+  opacity: 0.9;
+  font-style: italic;
+}
+
+.superai-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+}
+
+.superai-prose th, .superai-prose td {
+  border: 1px solid rgba(150, 150, 150, 0.2);
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.superai-prose th {
+  background: rgba(150, 150, 150, 0.1);
+  font-weight: 600;
+}

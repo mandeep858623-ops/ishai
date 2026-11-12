@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Master Gate: Global Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprints
+    function isValidVaultRecord(data) {
+      return data.keys().hasAll(['user_id', 'memories', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'memories', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.memories is list &&
+             data.updated_at is string;
+    }
+
+    function isValidFocusRecord(data) {
+      return data.keys().hasAll(['user_id', 'settings', 'tasks', 'goals', 'session_history', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'settings', 'tasks', 'goals', 'session_history', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.settings is map &&
+             data.tasks is list &&
+             data.goals is map &&
+             data.session_history is list &&
+             data.updated_at is string;
+    }
+
+    function isValidRemoteRecord(data) {
+      return data.keys().hasAll(['user_id', 'devices', 'active_device_id', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'devices', 'active_device_id', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.devices is list &&
+             data.active_device_id is string &&
+             data.updated_at is string;
+    }
+
+    function isValidClockSettings(data) {
+      return data.keys().hasAll(['user_id', 'theme', 'clock_style', 'format_24h', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'theme', 'clock_style', 'format_24h', 'timezone', 'world_clocks', 'alarms', 'routines', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.theme in ['light', 'dark', 'system'] &&
+             data.clock_style in ['minimal', 'digital', 'analog', 'neon', 'elegant'] &&
+             data.format_24h is bool &&
+             data.updated_at is string;
+    }
+
+    function isValidCalendarEvent(data) {
+      return data.keys().hasAll(['user_id', 'title', 'date', 'created_at']) &&
+             data.keys().hasOnly(['user_id', 'title', 'date', 'start_time', 'end_time', 'is_all_day', 'category', 'description', 'location', 'recurrence', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.title is string && data.title.size() <= 200 &&
+             data.date is string &&
+             data.created_at is string;
+    }
+
+    function isValidPlannerTask(data) {
+      return data.keys().hasAll(['user_id', 'title', 'priority', 'completed', 'created_at']) &&
+             data.keys().hasOnly(['user_id', 'title', 'description', 'due_date', 'priority', 'category', 'completed', 'estimate', 'created_at']) &&
+             data.user_id == request.auth.uid &&
+             data.title is string && data.title.size() <= 200 &&
+             data.priority in ['low', 'medium', 'high'] &&
+             data.completed is bool &&
+             data.created_at is string;
+    }
+
+    function isValidJournalNote(data) {
+      return data.keys().hasAll(['user_id', 'date', 'content', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'date', 'content', 'reflection', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.date is string &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.updated_at is string;
+    }
+
+    // Collection Security
+    match /user_vault_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidVaultRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_focus_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidFocusRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_remote_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidRemoteRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_clock_settings/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidClockSettings(incoming());
+      allow delete: if isOwner(userId);
+    }
+
+    match /user_clock_records/{userId} {
+      allow read: if isOwner(userId);
+      
+      match /calendar_events/{eventId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidCalendarEvent(incoming()));
+      }
+      
+      match /planner_tasks/{taskId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidPlannerTask(incoming()));
+      }
+      
+      match /journal_notes/{noteId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && (request.method == 'delete' || isValidJournalNote(incoming()));
+      }
+    }
+  }
+}

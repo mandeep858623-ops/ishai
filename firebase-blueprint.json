@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "CameraPhoto": {
+      "title": "Camera Photo",
+      "description": "Metadata for a photo captured by the camera",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique photo identifier" },
+        "userId": { "type": "string", "description": "Owner UID" },
+        "name": { "type": "string", "description": "Filename" },
+        "url": { "type": "string", "description": "Cloud Storage URL" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Capture timestamp" },
+        "size": { "type": "number", "description": "File size in bytes" },
+        "type": { "type": "string", "description": "MIME type" },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "filters": {
+          "type": "object",
+          "properties": {
+            "brightness": { "type": "number" },
+            "contrast": { "type": "number" },
+            "grayscale": { "type": "boolean" },
+            "sepia": { "type": "boolean" },
+            "hueRotate": { "type": "number" }
+          }
+        }
+      },
+      "required": ["userId", "name", "url", "createdAt"]
+    },
+    "Whiteboard": {
+      "title": "Whiteboard Board",
+      "description": "Infinite canvas whiteboard document containing shapes, sketches, and notes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique board identifier" },
+        "userId": { "type": "string", "description": "Owner UID" },
+        "title": { "type": "string", "description": "Board title" },
+        "preview": { "type": "string", "description": "Thumbnail preview image" },
+        "data": { "type": "object", "description": "Serialized canvas snapshot and shapes" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last updated timestamp" }
+      },
+      "required": ["userId", "title"]
+    },
+    "WeatherRecord": {
+      "title": "Weather Record",
+      "description": "Per-user weather settings, favorite locations, units, comparison lists, and notification preferences",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "description": "Owner UID" },
+        "favorite_locations": { "type": "array", "description": "Saved favorite weather locations" },
+        "recent_locations": { "type": "array", "description": "Recently searched weather locations" },
+        "units": { "type": "object", "description": "Configured temperature and measurement units" },
+        "widget_config": { "type": "object", "description": "Dashboard layout and visible widgets" },
+        "notification_settings": { "type": "object", "description": "Configured weather alert and notification preferences" },
+        "comparison_locations": { "type": "array", "description": "Saved comparison locations list" },
+        "updated_at": { "type": "string", "format": "date-time", "description": "Last updated timestamp" }
+      },
+      "required": ["user_id", "updated_at"]
+    },
+    "HoloSettings": {
+      "title": "Holo AI Personalization",
+      "description": "Per-user 3D avatar customization, environment, voice preferences, and conversation history",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "description": "Owner UID" },
+        "model_id": { "type": "string", "description": "Selected 3D avatar model" },
+        "environment_id": { "type": "string", "description": "Selected 3D backdrop environment" },
+        "avatar_scale": { "type": "number", "description": "Scale multiplier for avatar" },
+        "voice_id": { "type": "string", "description": "Selected TTS voice identifier" },
+        "voice_pitch": { "type": "number", "description": "Voice pitch modulation" },
+        "voice_speed": { "type": "number", "description": "Speech speed rate" },
+        "voice_gender": { "type": "string", "description": "Voice gender" },
+        "animation_intensity": { "type": "number", "description": "Animation dynamics scale" },
+        "reduced_motion": { "type": "boolean", "description": "Whether to reduce 3D motion" },
+        "show_floating_hud": { "type": "boolean", "description": "Toggle for floating holographic widgets" },
+        "theme": { "type": "string", "description": "UI Theme preference" },
+        "conversation_history": { "type": "array", "description": "Cached recent dialogue turns" },
+        "updated_at": { "type": "string", "format": "date-time", "description": "Last updated timestamp" }
+      },
+      "required": ["user_id", "updated_at"]
+    }
+  },
+  "firestore": {
+    "/camera_photos/{photoId}": {
+      "schema": "CameraPhoto",
+      "description": "User photo metadata"
+    },
+    "/whiteboards/{boardId}": {
+      "schema": "Whiteboard",
+      "description": "User whiteboard documents"
+    },
+    "/user_weather_records/{userId}": {
+      "schema": "WeatherRecord",
+      "description": "User personal weather configuration, locations, and settings"
+    },
+    "/user_holo_settings/{userId}": {
+      "schema": "HoloSettings",
+      "description": "User Holo AI personalization settings and chat history"
+    }
+  }
+}
