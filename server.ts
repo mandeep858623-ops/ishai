@@ -2,7 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { performDeepResearch, answerFollowUpQuestion, transformResearchReport } from './server/deepResearchEngine';
 import { generateSmartPlan, breakdownTaskSteps, generateProjectPlanRoadmap } from './server/smartPlannerEngine';
@@ -2017,6 +2016,17 @@ const handleYouTubeRouteError = (res: any, err: any) => {
   });
 };
 
+app.use('/api/youtube', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  return next();
+});
+
 app.get('/api/youtube/status', (_req, res) => {
   return res.json({ success: true, ...getYouTubeStatus() });
 });
@@ -3901,7 +3911,9 @@ process.on('unhandledRejection', (reason: any) => {
 });
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (!IS_VERCEL && process.env.NODE_ENV !== 'production') {
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(vitePkg);
     const vite = await createViteServer({
       server: {
         middlewareMode: true,

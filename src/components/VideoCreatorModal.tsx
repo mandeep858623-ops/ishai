@@ -394,12 +394,18 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       soundEngine.playClick();
       setPlayerError(null);
       setShowFullDesc(false);
-      setAutoplayOnLoad(true);
-      setCurrentVideo(video);
+      if (currentVideo?.id === video.id) {
+        try {
+          ytPlayerRef.current?.playVideo?.();
+        } catch {}
+      } else {
+        setAutoplayOnLoad(true);
+        setCurrentVideo(video);
+      }
       recordWatchedVideo(video);
       onLog(`▶️ Playing YouTube video inside ISHAI: "${video.title}" (${video.channelTitle})`, 'MEDIA');
     },
-    [recordWatchedVideo, onLog]
+    [currentVideo?.id, recordWatchedVideo, onLog]
   );
 
   const runSearch = useCallback(
@@ -818,13 +824,15 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
               <div className={`rounded-2xl border overflow-hidden ${bgSurface}`}>
                 <div className="relative w-full aspect-video bg-black">
                   <iframe
-                    key={`${currentVideo.id}-${autoplayOnLoad ? 'play' : 'ready'}`}
+                    key={currentVideo.id}
                     id={`ishai-yt-iframe-${currentVideo.id}`}
                     src={`https://www.youtube.com/embed/${encodeURIComponent(
                       currentVideo.id
-                    )}?enablejsapi=1&autoplay=${autoplayOnLoad ? 1 : 0}&controls=1&fs=1&rel=0&modestbranding=1&playsinline=1&origin=${encodeURIComponent(
-                      typeof window !== 'undefined' ? window.location.origin : ''
-                    )}`}
+                    )}?enablejsapi=1&autoplay=${autoplayOnLoad ? 1 : 0}&controls=1&fs=1&rel=0&modestbranding=1&playsinline=1${
+                      typeof window !== 'undefined' && window.location.origin.startsWith('http')
+                        ? `&origin=${encodeURIComponent(window.location.origin)}`
+                        : ''
+                    }`}
                     title={currentVideo.title}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
                     allowFullScreen
@@ -1118,7 +1126,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
             )}
 
             {/* Error State */}
-            {listError && activeSection !== 'history' && activeSection !== 'favorites' && !listError.missingKey && (
+            {listError && activeSection !== 'history' && activeSection !== 'favorites' && (
               <div className={`rounded-xl border p-4 flex items-center justify-between gap-3 ${bgSurface}`}>
                 <div className="flex items-center gap-2.5 text-xs sm:text-sm text-amber-500">
                   <AlertTriangle className="w-4 h-4 shrink-0" />

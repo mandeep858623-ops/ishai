@@ -183,17 +183,40 @@ async function ytFetch(endpoint: string, params: Record<string, string | number 
     if (!res.ok) {
       const apiErr = data?.error;
       const reason = apiErr?.errors?.[0]?.reason || '';
+      const detailReason = apiErr?.details?.[0]?.reason || '';
       const msg = apiErr?.message || `YouTube API request failed (HTTP ${res.status})`;
 
       if (reason === 'quotaExceeded' || reason === 'dailyLimitExceeded') {
         throw new YouTubeServiceError(
-          'YouTube Data API v3 daily quota exceeded.',
+          'YouTube Data API v3 daily quota exceeded. Try again later or increase quota in Google Cloud Console.',
           429,
           'YOUTUBE_QUOTA_EXCEEDED',
           true
         );
       }
-      if (reason === 'keyInvalid' || reason === 'ipRefererBlocked' || res.status === 403) {
+      if (
+        reason === 'ipRefererBlocked' ||
+        detailReason === 'API_KEY_HTTP_REFERRER_BLOCKED' ||
+        /referer|referrer/i.test(msg)
+      ) {
+        throw new YouTubeServiceError(
+          'YouTube Data API v3 rejected this request because your Google Cloud API key has HTTP Referrer (website) restrictions enabled. Because ISHAI calls YouTube securely from the server, set Application restrictions to "None" and API restrictions to "YouTube Data API v3" in Google Cloud Console.',
+          403,
+          'YOUTUBE_API_REFERRER_BLOCKED',
+          true,
+          'YOUTUBE_API_KEY'
+        );
+      }
+      if (reason === 'accessNotConfigured' || detailReason === 'SERVICE_DISABLED') {
+        throw new YouTubeServiceError(
+          'YouTube Data API v3 is not enabled in your Google Cloud project. Enable "YouTube Data API v3" in Google Cloud Console -> APIs & Services.',
+          403,
+          'YOUTUBE_API_DISABLED',
+          true,
+          'YOUTUBE_API_KEY'
+        );
+      }
+      if (reason === 'keyInvalid' || detailReason === 'API_KEY_INVALID' || res.status === 403 || res.status === 401) {
         throw new YouTubeServiceError(
           `YouTube Data API v3 key error: ${msg}`,
           res.status,
@@ -242,8 +265,12 @@ async function enrichVideoIds(videoIds: string[]): Promise<YouTubeVideoItem[]> {
 // Public YouTube Web Search & oEmbed Fallback (when API key unset)
 // Zero downloader links, zero invented mock videos — real YouTube results
 // ============================================================
+const YT_CONSENT_COOKIE = 'SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; CONSENT=YES+cb.20210328-17-p0.en+FX+100';
+const YT_BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
 function collectVideoRenderers(node: any, out: any[], depth = 0): void {
-  if (!node || typeof node !== 'object' || depth > 14 || out.length >= 40) return;
+  if (!node || typeof node !== 'object' || depth > 16 || out.length >= 40) return;
   if (Array.isArray(node)) {
     for (const item of node) {
       collectVideoRenderers(item, out, depth + 1);
@@ -252,7 +279,16 @@ function collectVideoRenderers(node: any, out: any[], depth = 0): void {
     return;
   }
   if (node.videoRenderer && typeof node.videoRenderer === 'object' && node.videoRenderer.videoId) {
-    out.push(node.videoRenderer);
+    out.push({ kind: 'videoRenderer', node: node.videoRenderer });
+    return;
+  }
+  if (
+    node.lockupViewModel &&
+    typeof node.lockupViewModel === 'object' &&
+    typeof node.lockupViewModel.contentId === 'string' &&
+    /^[a-zA-Z0-9_-]{11}$/.test(node.lockupViewModel.contentId)
+  ) {
+    out.push({ kind: 'lockupViewModel', node: node.lockupViewModel });
     return;
   }
   for (const val of Object.values(node)) {
@@ -265,6 +301,8 @@ function collectVideoRenderers(node: any, out: any[], depth = 0): void {
 
 function readRunsText(obj: any): string {
   if (!obj) return '';
+  if (typeof obj === 'string') return obj;
+  if (typeof obj.content === 'string') return obj.content;
   if (typeof obj.simpleText === 'string') return obj.simpleText;
   if (Array.isArray(obj.runs)) {
     return obj.runs.map((r: any) => r?.text || '').join('').trim();
@@ -272,11 +310,146 @@ function readRunsText(obj: any): string {
   return '';
 }
 
-async function searchYouTubePublicWeb(
+function extractVideosFromYtData(rootData: any, maxResults: number): YouTubeVideoItem[] {
+  const renderers: Array<{ kind: string; node: any }> = [];
+  collectVideoRenderers(rootData?.contents ?? rootData, renderers);
+
+  const videos: YouTubeVideoItem[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of renderers) {
+    if (entry.kind === 'lockupViewModel') {
+      const vm = entry.node;
+      const id = vm.contentId;
+      if (!id || !/^[a-zA-Z0-9_-]{11}$/.test(id) || seen.has(id)) continue;
+      seen.add(id);
+
+      const meta = vm.metadata?.lockupMetadataViewModel || {};
+      const title = readRunsText(meta.title) || 'YouTube Video';
+      const rows = meta.metadata?.contentMetadataViewModel?.metadataRows || [];
+      const channelTitle = readRunsText(rows?.[0]?.metadataParts?.[0]?.text) || 'YouTube Creator';
+      const viewCount = readRunsText(rows?.[1]?.metadataParts?.[0]?.text) || '';
+      const publishedAt = readRunsText(rows?.[1]?.metadataParts?.[1]?.text) || '';
+      const thumbs = vm.contentImage?.thumbnailViewModel?.image?.sources;
+      const thumbnail =
+        (Array.isArray(thumbs) && thumbs.length > 0 ? thumbs[thumbs.length - 1]?.url : '') ||
+        `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+      videos.push({
+        id,
+        title,
+        description: '',
+        channelId: '',
+        channelTitle,
+        thumbnail: thumbnail.startsWith('//') ? `https:${thumbnail}` : thumbnail,
+        publishedAt,
+        duration: '',
+        viewCount,
+        embeddable: true,
+        privacyStatus: 'public',
+      });
+    } else {
+      const v = entry.node;
+      const id = v?.videoId;
+      if (!id || !/^[a-zA-Z0-9_-]{11}$/.test(id) || seen.has(id)) continue;
+      seen.add(id);
+
+      const title = readRunsText(v.title) || 'YouTube Video';
+      const channelTitle = readRunsText(v.ownerText) || readRunsText(v.longBylineText) || 'YouTube Creator';
+      const channelId = v.ownerText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '';
+      const duration = readRunsText(v.lengthText) || '';
+      const viewCount = readRunsText(v.viewCountText) || readRunsText(v.shortViewCountText) || '';
+      const publishedAt = readRunsText(v.publishedTimeText) || '';
+      const snippetFromDetailed = Array.isArray(v.detailedMetadataSnippets)
+        ? readRunsText(v.detailedMetadataSnippets[0]?.snippetText)
+        : '';
+      const description = snippetFromDetailed || readRunsText(v.descriptionSnippet) || '';
+      const thumbs = v.thumbnail?.thumbnails;
+      const thumbnail =
+        (Array.isArray(thumbs) && thumbs.length > 0 ? thumbs[thumbs.length - 1]?.url : '') ||
+        `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+
+      videos.push({
+        id,
+        title,
+        description,
+        channelId,
+        channelTitle,
+        thumbnail: thumbnail.startsWith('//') ? `https:${thumbnail}` : thumbnail,
+        publishedAt,
+        duration: duration || (v.badges?.some((b: any) => b?.metadataBadgeRenderer?.style?.includes('LIVE')) ? 'LIVE' : ''),
+        viewCount,
+        embeddable: true,
+        privacyStatus: 'public',
+      });
+    }
+
+    if (videos.length >= maxResults) break;
+  }
+
+  return videos;
+}
+
+async function searchYouTubeInnertube(
   query: string,
-  maxResults = 16,
-  order: 'relevance' | 'date' | 'viewCount' | 'rating' = 'relevance'
+  maxResults: number,
+  order: 'relevance' | 'date' | 'viewCount' | 'rating'
 ): Promise<YouTubeVideoItem[]> {
+  const spMap: Record<string, string | undefined> = {
+    relevance: undefined,
+    date: 'CAI%3D',
+    viewCount: 'CAM%3D',
+    rating: 'CAE%3D',
+  };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': YT_BROWSER_UA,
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://www.youtube.com',
+        'Referer': 'https://www.youtube.com/',
+        'Cookie': YT_CONSENT_COOKIE,
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: 'WEB',
+            clientVersion: '2.20240726.00.00',
+            hl: 'en',
+            gl: (process.env.YOUTUBE_REGION_CODE || 'US').toUpperCase(),
+          },
+        },
+        query,
+        ...(spMap[order] ? { params: decodeURIComponent(spMap[order]!) } : {}),
+      }),
+    });
+
+    if (!res.ok) {
+      throw new YouTubeServiceError(
+        `YouTube search returned HTTP ${res.status}`,
+        res.status,
+        'YOUTUBE_UPSTREAM_ERROR',
+        true
+      );
+    }
+
+    const data = await res.json();
+    return extractVideosFromYtData(data, maxResults);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function searchYouTubeResultsHtml(
+  query: string,
+  maxResults: number,
+  order: 'relevance' | 'date' | 'viewCount' | 'rating'
+): Promise<{ videos: YouTubeVideoItem[]; parsedInitialData: boolean }> {
   const sortParams: Record<string, string> = {
     relevance: '',
     date: '&sp=CAI%253D',
@@ -292,9 +465,9 @@ async function searchYouTubePublicWeb(
     const res = await fetch(searchUrl, {
       signal: controller.signal,
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'User-Agent': YT_BROWSER_UA,
         'Accept-Language': 'en-US,en;q=0.9',
+        'Cookie': YT_CONSENT_COOKIE,
       },
     });
     if (!res.ok) {
@@ -302,62 +475,51 @@ async function searchYouTubePublicWeb(
     }
 
     const html = await res.text();
-    const jsonMatch = html.match(/var ytInitialData = (\{.*?\});<\/script>/);
-    const videos: YouTubeVideoItem[] = [];
-    const seen = new Set<string>();
-
-    if (jsonMatch) {
-      try {
-        const data = JSON.parse(jsonMatch[1]);
-        const renderers: any[] = [];
-        collectVideoRenderers(data?.contents, renderers);
-
-        for (const v of renderers) {
-          const id = v?.videoId;
-          if (!id || !/^[a-zA-Z0-9_-]{11}$/.test(id) || seen.has(id)) continue;
-          seen.add(id);
-
-          const title = readRunsText(v.title) || 'YouTube Video';
-          const channelTitle = readRunsText(v.ownerText) || readRunsText(v.longBylineText) || 'YouTube Creator';
-          const channelId =
-            v.ownerText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || '';
-          const duration = readRunsText(v.lengthText) || '';
-          const viewCount = readRunsText(v.viewCountText) || readRunsText(v.shortViewCountText) || '';
-          const publishedAt = readRunsText(v.publishedTimeText) || '';
-          const snippetFromDetailed = Array.isArray(v.detailedMetadataSnippets)
-            ? readRunsText(v.detailedMetadataSnippets[0]?.snippetText)
-            : '';
-          const description = snippetFromDetailed || readRunsText(v.descriptionSnippet) || '';
-          const thumbs = v.thumbnail?.thumbnails;
-          const thumbnail =
-            (Array.isArray(thumbs) && thumbs.length > 0 ? thumbs[thumbs.length - 1]?.url : '') ||
-            `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-
-          videos.push({
-            id,
-            title,
-            description,
-            channelId,
-            channelTitle,
-            thumbnail: thumbnail.startsWith('//') ? `https:${thumbnail}` : thumbnail,
-            publishedAt,
-            duration: duration || (v.badges?.some((b: any) => b?.metadataBadgeRenderer?.style?.includes('LIVE')) ? 'LIVE' : ''),
-            viewCount,
-            embeddable: true,
-            privacyStatus: 'public',
-          });
-
-          if (videos.length >= maxResults) break;
-        }
-      } catch (parseErr) {
-        console.warn('[YouTube Web Fallback] Parse error:', parseErr);
-      }
+    const jsonMatch = html.match(/var ytInitialData\s*=\s*(\{[\s\S]*?\});\s*<\/script>/);
+    if (!jsonMatch) {
+      return { videos: [], parsedInitialData: false };
     }
 
-    return videos;
+    const data = JSON.parse(jsonMatch[1]);
+    return { videos: extractVideosFromYtData(data, maxResults), parsedInitialData: true };
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function searchYouTubePublicWeb(
+  query: string,
+  maxResults = 16,
+  order: 'relevance' | 'date' | 'viewCount' | 'rating' = 'relevance'
+): Promise<YouTubeVideoItem[]> {
+  let innertubeErr: any = null;
+  try {
+    const videos = await searchYouTubeInnertube(query, maxResults, order);
+    if (videos.length > 0) return videos;
+  } catch (err) {
+    innertubeErr = err;
+  }
+
+  try {
+    const htmlResult = await searchYouTubeResultsHtml(query, maxResults, order);
+    if (htmlResult.videos.length > 0 || htmlResult.parsedInitialData) {
+      return htmlResult.videos;
+    }
+  } catch (htmlErr) {
+    if (!innertubeErr) innertubeErr = htmlErr;
+  }
+
+  if (innertubeErr) {
+    throw new YouTubeServiceError(
+      'YouTube blocked unauthenticated search from this server IP. Add YOUTUBE_API_KEY in Vercel Environment Variables to enable official YouTube Data API v3 search.',
+      503,
+      'YOUTUBE_API_KEY_MISSING',
+      false,
+      'YOUTUBE_API_KEY'
+    );
+  }
+
+  return [];
 }
 
 async function fetchYouTubeOEmbed(videoId: string): Promise<YouTubeVideoItem> {
@@ -558,7 +720,10 @@ export async function browseYouTubeCategory(options: {
     } catch (err: any) {
       if (
         err instanceof YouTubeServiceError &&
-        (err.code === 'YOUTUBE_QUOTA_EXCEEDED' || err.code === 'YOUTUBE_API_AUTH_ERROR')
+        (err.code === 'YOUTUBE_QUOTA_EXCEEDED' ||
+          err.code === 'YOUTUBE_API_AUTH_ERROR' ||
+          err.code === 'YOUTUBE_API_REFERRER_BLOCKED' ||
+          err.code === 'YOUTUBE_API_DISABLED')
       ) {
         throw err;
       }
@@ -651,6 +816,10 @@ export async function getRelatedYouTubeVideos(videoId: string): Promise<{
   if (cached) return cached;
 
   const source = await getYouTubeVideoDetails(cleanId);
+  if (!source.embeddable || source.title === `YouTube Video (${cleanId})`) {
+    return { videos: [], sourceVideoId: cleanId };
+  }
+
   const cleanedKeywords = source.title
     .replace(/[^\w\s]/g, ' ')
     .split(/\s+/)

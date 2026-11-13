@@ -2091,7 +2091,8 @@ export default function App() {
          if (destination === 'google') {
            window.open(`https://google.com/search?q=${encodeURIComponent(query)}`, '_blank');
          } else if (destination === 'youtube') {
-           window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, '_blank');
+           setActiveModal('VIDEO_CREATOR');
+           writeLog(`Opening ISHAI YouTube Player for query: "${query}"`, 'MEDIA');
          } else if (destination === 'wikipedia') {
            window.open(`https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(query)}`, '_blank');
          } else if (destination === 'vault' || destination === 'my files') {

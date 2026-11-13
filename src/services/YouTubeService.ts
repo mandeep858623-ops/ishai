@@ -165,6 +165,17 @@ export function loadYouTubeIframeAPI(): Promise<any> {
 // ============================================================
 async function apiGet<T>(url: string): Promise<T> {
   const res = await fetch(url);
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const rawText = await res.text().catch(() => '');
+    const snippet = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140);
+    throw new YouTubeClientError(
+      `YouTube API endpoint returned an unexpected response (HTTP ${res.status})${snippet ? `: ${snippet}` : ''}`,
+      res.status || 500,
+      'YOUTUBE_BACKEND_NON_JSON',
+      res.status !== 503
+    );
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data?.success === false) {
     throw new YouTubeClientError(

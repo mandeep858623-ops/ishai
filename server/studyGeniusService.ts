@@ -4,8 +4,23 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
+async function loadPdfParse(): Promise<any> {
+  try {
+    const mod: any = await import('pdf-parse');
+    if (typeof mod === 'function') return mod;
+    if (typeof mod?.default === 'function') return mod.default;
+    if (typeof mod?.PDFParse === 'function') return mod;
+  } catch {}
+  const req =
+    typeof require === 'function'
+      ? require
+      : createRequire(
+          typeof import.meta?.url === 'string' && import.meta.url
+            ? import.meta.url
+            : `${process.cwd()}/package.json`
+        );
+  return req('pdf-parse');
+}
 
 function getAIClient(): GoogleGenAI {
   return new GoogleGenAI({
@@ -29,7 +44,17 @@ export async function extractTextFromPDF(buffer: Buffer): Promise<{
   info?: any;
 }> {
   try {
-    const data = await pdfParse(buffer);
+    const pdfMod = await loadPdfParse();
+    let data: any;
+    if (typeof pdfMod === 'function') {
+      data = await pdfMod(buffer);
+    } else if (typeof pdfMod?.PDFParse === 'function') {
+      const parser = new pdfMod.PDFParse({ data: buffer });
+      const textResult = await parser.getText();
+      data = { text: textResult?.text || '', numpages: textResult?.total || 1 };
+    } else {
+      throw new Error('Unsupported pdf-parse module export');
+    }
     const cleaned = (data.text || '')
       .replace(/\r\n/g, '\n')
       .replace(/[ \t]+/g, ' ')
