@@ -139,7 +139,7 @@ export const CameraService = {
     };
 
     // 3. Save to Firestore camera_photos collection if permitted
-    if (auth.currentUser && resolvedUrl.length <= 2000) {
+    if (auth.currentUser && auth.currentUser.uid === userId && resolvedUrl.length <= 2000) {
       try {
         const docRef = await addDoc(collection(db, COLLECTION_NAME), {
           id: photoId,
@@ -398,7 +398,7 @@ export const CameraService = {
         if (snap.exists()) {
           const remoteMemories = snap.data().memories || [];
           const updated = remoteMemories.filter((m: any) => m.id !== memoryId && m.id !== altMemoryId && m.sourceReference !== photo.url);
-          await setDoc(vaultDocRef, { memories: updated, updated_at: new Date().toISOString() }, { merge: true });
+          await setDoc(vaultDocRef, { user_id: userId, memories: updated, updated_at: new Date().toISOString() }, { merge: true });
         }
       } catch (vErr) {
         console.warn('[CameraService] Firestore vault sync deletion failed:', vErr);
@@ -434,7 +434,7 @@ export const CameraService = {
     const userId = customUserId || auth.currentUser?.uid || 'guest_default';
 
     // 1. Update Firestore camera_photos
-    if (auth.currentUser) {
+    if (auth.currentUser && auth.currentUser.uid === userId) {
       try {
         const docRef = doc(db, COLLECTION_NAME, id);
         await updateDoc(docRef, { name: newName });
@@ -475,7 +475,7 @@ export const CameraService = {
             }
             return m;
           });
-          await setDoc(vaultDocRef, { memories: updated, updated_at: new Date().toISOString() }, { merge: true });
+          await setDoc(vaultDocRef, { user_id: userId, memories: updated, updated_at: new Date().toISOString() }, { merge: true });
         }
       }
     } catch (e) {
@@ -491,7 +491,7 @@ export const CameraService = {
   async updatePhoto(id: string, updates: Partial<CameraPhoto>, customUserId?: string): Promise<void> {
     const userId = customUserId || auth.currentUser?.uid || 'guest_default';
 
-    if (auth.currentUser) {
+    if (auth.currentUser && auth.currentUser.uid === userId) {
       try {
         const docRef = doc(db, COLLECTION_NAME, id);
         await updateDoc(docRef, updates);

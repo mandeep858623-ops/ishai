@@ -178,8 +178,8 @@ export const NewsService = {
     const updated = [article, ...current];
     try {
       localStorage.setItem(key, JSON.stringify(updated));
-      if (auth.currentUser && userId !== 'guest_default') {
-        setDoc(doc(db, 'user_news_library', userId), { savedArticles: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      if (auth.currentUser && auth.currentUser.uid === userId) {
+        setDoc(doc(db, 'user_news_library', userId), { user_id: userId, savedArticles: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
       }
     } catch {}
     return updated;
@@ -191,8 +191,8 @@ export const NewsService = {
     const updated = current.filter((a) => a.id !== articleId);
     try {
       localStorage.setItem(key, JSON.stringify(updated));
-      if (auth.currentUser && userId !== 'guest_default') {
-        setDoc(doc(db, 'user_news_library', userId), { savedArticles: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      if (auth.currentUser && auth.currentUser.uid === userId) {
+        setDoc(doc(db, 'user_news_library', userId), { user_id: userId, savedArticles: updated, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
       }
     } catch {}
     return updated;
@@ -228,8 +228,8 @@ export const NewsService = {
     const key = `${NEWS_PREFS_PREFIX}_${userId}`;
     try {
       localStorage.setItem(key, JSON.stringify(prefs));
-      if (auth.currentUser && userId !== 'guest_default') {
-        setDoc(doc(db, 'user_news_prefs', userId), { preferences: prefs, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+      if (auth.currentUser && auth.currentUser.uid === userId) {
+        setDoc(doc(db, 'user_news_prefs', userId), { user_id: userId, preferences: prefs, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
       }
     } catch {}
   },

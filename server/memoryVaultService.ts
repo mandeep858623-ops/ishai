@@ -16,8 +16,7 @@ function getAIClient(): GoogleGenAI {
 }
 
 const modelsToTry = [
-  'gemini-3.8-flash',
-  'gemini-flash-latest',
+  'gemini-4-hydrogen',
   'gemini-3.1-flash-lite',
 ];
 
@@ -149,7 +148,6 @@ Rules:
           contents: prompt,
           config: {
             systemInstruction,
-            temperature: 0.3,
           },
         });
 

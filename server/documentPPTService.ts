@@ -90,7 +90,7 @@ export async function generateDocumentOrPresentation(
     detailLevel = 'balanced',
   } = params;
 
-  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
 
   // -------------------------------------------------------------
   // 1. PRESENTATION (PPT) GENERATION
@@ -185,7 +185,6 @@ Return ONLY STRICT JSON adhering precisely to this structure:
           config: {
             systemInstruction: systemPrompt,
             responseMimeType: 'application/json',
-            temperature: 0.7,
           },
         });
 
@@ -674,7 +673,6 @@ Rules:
         contents: `Generate complete, high-quality ${toolType} on: "${topic || title}". Language: ${language}. Style: ${style}. Length: ${length}.`,
         config: {
           systemInstruction: systemPrompt,
-          temperature: 0.65,
         },
       });
 
@@ -734,7 +732,7 @@ export async function assistSlideWithAI(params: SlideAIAssistRequest): Promise<{
   explanation: string;
 }> {
   const { instruction, slide, presentationTitle = 'Presentation' } = params;
-  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
   const ai = getAIClient();
 
   const prompt = `You are a world-class PowerPoint slide designer and presentation editor.
@@ -786,7 +784,6 @@ Return ONLY strict JSON matching this structure:
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
-          temperature: 0.6,
         },
       });
 

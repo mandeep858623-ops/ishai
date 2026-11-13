@@ -493,21 +493,35 @@ Answer accurately, insightfully, and concisely using the provided telemetry.`;
       break;
   }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          { text: `METEOROLOGICAL CONTEXT DATA:\n${contextJson}\n\nUSER PROMPT:\n${promptText}` }
-        ]
-      }
-    ],
-    config: {
-      systemInstruction,
-      temperature: 0.3
-    }
-  });
+  const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+  let lastErr: any;
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: `METEOROLOGICAL CONTEXT DATA:\n${contextJson}\n\nUSER PROMPT:\n${promptText}` }
+            ]
+          }
+        ],
+        config: {
+          systemInstruction,
+        }
+      });
 
-  return response.text || 'Weather analysis complete.';
+      if (response.text) {
+        return response.text;
+      }
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[WeatherService] Model ${model} failed:`, (err as any)?.message || err);
+    }
+  }
+  if (lastErr) {
+    throw lastErr;
+  }
+  return 'Weather analysis complete.';
 }

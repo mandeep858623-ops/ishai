@@ -18,7 +18,7 @@ function getAIClient(): GoogleGenAI {
   });
 }
 
-const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
 
 /**
  * Extract clean text from PDF Buffer using pdf-parse
@@ -98,7 +98,6 @@ Format clearly with Markdown headings (##), bold text, and organized bullet poin
         contents: promptContent,
         config: {
           systemInstruction,
-          temperature: 0.5,
         },
       });
 
@@ -160,7 +159,6 @@ Only return valid JSON array without markdown code fences.`;
         config: {
           systemInstruction,
           responseMimeType: 'application/json',
-          temperature: 0.6,
         },
       });
 
@@ -236,7 +234,6 @@ Only return valid JSON array without markdown code fences.`;
         config: {
           systemInstruction,
           responseMimeType: 'application/json',
-          temperature: 0.6,
         },
       });
 
@@ -293,7 +290,6 @@ Rules:
         contents: prompt,
         config: {
           systemInstruction,
-          temperature: 0.5,
         },
       });
 
@@ -358,7 +354,6 @@ Return STRICT JSON:
         config: {
           systemInstruction,
           responseMimeType: 'application/json',
-          temperature: 0.4,
         },
       });
 
@@ -433,7 +428,6 @@ You MUST follow this exact chapter structure:
         contents: prompt,
         config: {
           systemInstruction,
-          temperature: 0.6,
         },
       });
 
@@ -493,7 +487,6 @@ Time Allowed: 60 Minutes | Total Marks: 50
         contents: prompt,
         config: {
           systemInstruction,
-          temperature: 0.65,
         },
       });
 
@@ -566,7 +559,6 @@ Only return valid JSON array without markdown fences.`;
         config: {
           systemInstruction,
           responseMimeType: 'application/json',
-          temperature: 0.6,
         },
       });
 

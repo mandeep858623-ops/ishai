@@ -48,7 +48,7 @@ setInterval(() => {
       activeSessions.delete(token);
     }
   }
-}, 60000);
+}, 60000).unref();
 
 // Comprehensive International Country Calling Codes & Geographic Numbering Plan Registry
 export interface AreaCodeGeo {

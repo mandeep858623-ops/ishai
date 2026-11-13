@@ -97,6 +97,18 @@
     "/user_holo_settings/{userId}": {
       "schema": "HoloSettings",
       "description": "User Holo AI personalization settings and chat history"
+    },
+    "/user_screen_companion_records/{userId}": {
+      "description": "Per-user AI Screen Companion session history"
+    },
+    "/user_news_library/{userId}": {
+      "description": "Per-user saved news bookmarks"
+    },
+    "/user_news_prefs/{userId}": {
+      "description": "Per-user news category and region preferences"
+    },
+    "/cityverse_projects/{projectId}": {
+      "description": "User-owned 3D Cityverse saved city projects"
     }
   }
 }

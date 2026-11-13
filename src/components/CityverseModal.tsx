@@ -61,7 +61,7 @@ import {
 } from './Cityverse/simulationEngine';
 import { processCityverseAiPrompt } from './Cityverse/CityverseAI';
 import { soundEngine } from '../utils/audio';
-import { db } from '../firebaseConfig';
+import { db, auth } from '../firebaseConfig';
 import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 
 interface CityverseModalProps {
@@ -347,8 +347,8 @@ export const CityverseModal: React.FC<CityverseModalProps> = ({
     soundEngine.playClick();
     try {
       localStorage.setItem(`Cityverse_Project_${userId}`, JSON.stringify(project));
-      if (userId && userId !== 'guest') {
-        await setDoc(doc(db, 'cityverse_projects', project.id), project, { merge: true });
+      if (auth.currentUser && auth.currentUser.uid === userId) {
+        await setDoc(doc(db, 'cityverse_projects', project.id), { ...project, userId: auth.currentUser.uid }, { merge: true });
       }
       writeLog(`City project "${project.name}" saved successfully.`, 'CITYVERSE');
     } catch (err: any) {

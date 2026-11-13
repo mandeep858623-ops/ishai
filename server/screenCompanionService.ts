@@ -137,10 +137,8 @@ export async function analyzeScreenImage(
   }
 
   const modelsToTry = [
-    'gemini-2.5-flash',
+    'gemini-4-hydrogen',
     'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
-    'gemini-3.8-flash',
   ];
 
   let analysisText = '';
@@ -165,9 +163,6 @@ export async function analyzeScreenImage(
             ],
           },
         ],
-        config: {
-          temperature: 0.4,
-        },
       });
 
       if (response && response.text) {

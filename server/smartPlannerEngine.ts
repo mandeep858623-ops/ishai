@@ -102,7 +102,7 @@ Generate an optimal schedule and task action items in JSON format:
   ]
 }`;
 
-  const models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  const models = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
 
   for (const model of models) {
     try {
@@ -113,7 +113,6 @@ Generate an optimal schedule and task action items in JSON format:
         config: {
           systemInstruction,
           responseMimeType: 'application/json',
-          temperature: 0.3,
         },
       });
 
@@ -182,25 +181,26 @@ Output JSON format:
   ]
 }`;
 
-  try {
-    const res = await aiClient.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-      },
-    });
+  for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+    try {
+      const res = await aiClient.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
 
-    if (res && res.text) {
-      const clean = res.text.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(clean);
-      if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
-        return parsed.steps;
+      if (res && res.text) {
+        const clean = res.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(clean);
+        if (Array.isArray(parsed.steps) && parsed.steps.length > 0) {
+          return parsed.steps;
+        }
       }
+    } catch (err: any) {
+      console.warn(`Breakdown (${model}) failed:`, err?.message || err);
     }
-  } catch (err: any) {
-    console.warn('Breakdown failed:', err?.message || err);
   }
 
   return [
@@ -241,25 +241,26 @@ Output JSON format:
   ]
 }`;
 
-  try {
-    const res = await aiClient.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-      },
-    });
+  for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+    try {
+      const res = await aiClient.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
 
-    if (res && res.text) {
-      const clean = res.text.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(clean);
-      if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
-        return parsed.milestones;
+      if (res && res.text) {
+        const clean = res.text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(clean);
+        if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
+          return parsed.milestones;
+        }
       }
+    } catch (err: any) {
+      console.warn(`Project plan (${model}) failed:`, err?.message || err);
     }
-  } catch (err: any) {
-    console.warn('Project plan failed:', err?.message || err);
   }
 
   return [

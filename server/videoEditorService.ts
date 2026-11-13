@@ -12,6 +12,26 @@ const ai = new GoogleGenAI({
   },
 });
 
+const MODELS_TO_TRY = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+
+async function generateEditorText(prompt: string): Promise<string> {
+  let lastError: any;
+  for (const model of MODELS_TO_TRY) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+      });
+      if (response?.text) {
+        return response.text.trim();
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('All AI models failed');
+}
+
 export interface SubtitleResponseItem {
   start: number;
   end: number;
@@ -48,15 +68,7 @@ Rules:
 4. Do not include markdown code block formatting like \`\`\`json. Return raw JSON array only.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: {
-        temperature: 0.3,
-      },
-    });
-
-    const text = response.text?.trim() || '';
+    const text = await generateEditorText(prompt);
     const cleanJson = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
     const parsed = JSON.parse(cleanJson);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -115,15 +127,7 @@ Return ONLY JSON:
 }`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: {
-        temperature: 0.7,
-      },
-    });
-
-    const text = response.text?.trim() || '';
+    const text = await generateEditorText(prompt);
     const cleanJson = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
     return JSON.parse(cleanJson);
   } catch (err) {
@@ -166,15 +170,7 @@ ${JSON.stringify(subtitles, null, 2)}
 Return ONLY valid JSON matching the exact same schema. No markdown backticks.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: {
-        temperature: 0.2,
-      },
-    });
-
-    const text = response.text?.trim() || '';
+    const text = await generateEditorText(prompt);
     const cleanJson = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
     const parsed = JSON.parse(cleanJson);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -228,15 +224,7 @@ Return ONLY JSON:
 ]`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: {
-        temperature: 0.4,
-      },
-    });
-
-    const text = response.text?.trim() || '';
+    const text = await generateEditorText(prompt);
     const cleanJson = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
     return JSON.parse(cleanJson);
   } catch (err) {
@@ -288,15 +276,7 @@ Return ONLY JSON:
 ]`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: {
-        temperature: 0.8,
-      },
-    });
-
-    const text = response.text?.trim() || '';
+    const text = await generateEditorText(prompt);
     const cleanJson = text.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
     return JSON.parse(cleanJson);
   } catch (err) {

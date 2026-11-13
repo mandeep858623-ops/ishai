@@ -74,7 +74,7 @@ export async function generateStudioImage(
     prompt,
     aspectRatio = '1:1',
     style = 'none',
-    model = 'gemini-3.1-flash-lite',
+    model = 'gemini-3.1-flash-lite-image',
     negativePrompt = '',
     referenceImageBase64,
   } = options;
@@ -110,7 +110,11 @@ export async function generateStudioImage(
 
   // 1. Try Gemini GenAI Image Generation
   try {
-    const activeModel = model === 'gemini-nano-banana-2.1' ? 'gemini-nano-banana-2.1' : 'gemini-3.1-flash-lite';
+    const activeModel =
+      model === 'gemini-nano-banana-2.1'
+        ? 'gemini-nano-banana-2.1'
+        : 'gemini-3.1-flash-lite-image';
+    modelUsed = activeModel;
 
     // If reference image provided, execute multimodal conditioning
     if (referenceImageBase64) {
@@ -132,6 +136,11 @@ export async function generateStudioImage(
               text: `Generate a new high-quality image based on this reference: ${fullPrompt}`,
             },
           ],
+        },
+        config: {
+          imageConfig: {
+            aspectRatio,
+          },
         },
       });
 
@@ -164,7 +173,7 @@ export async function generateStudioImage(
             },
           ],
         },
-        config: activeModel === 'gemini-3.1-flash-lite' ? undefined : {
+        config: {
           imageConfig: {
             aspectRatio,
           },
@@ -271,7 +280,7 @@ export async function editStudioImage(
 
   const cleanData = imageBase64.replace(/^data:image\/\w+;base64,/, '');
   let editedImageUrl = '';
-  const modelUsed = 'gemini-3.1-flash-lite';
+  const modelUsed = 'gemini-3.1-flash-lite-image';
 
   try {
     const response = await ai.models.generateContent({
@@ -371,11 +380,10 @@ export async function enhanceStudioPrompt(
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: 'gemini-4-hydrogen',
       contents: userQuery,
       config: {
         systemInstruction,
-        temperature: 0.7,
       },
     });
 

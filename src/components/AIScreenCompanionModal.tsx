@@ -44,7 +44,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { db, auth } from '../firebaseConfig';
 
 export type CompanionMode =
   | 'explain'
@@ -263,9 +263,9 @@ export const AIScreenCompanionModal: React.FC<AIScreenCompanionModalProps> = ({
     isAnalyzingRef.current = isAnalyzing;
   }, [isAnalyzing]);
 
-  // Load Firestore Sessions if logged in
+  // Load Firestore Sessions if logged in with matching Firebase Auth UID
   useEffect(() => {
-    if (!currentUser?.uid) return;
+    if (!auth.currentUser || auth.currentUser.uid !== currentUser?.uid) return;
     const loadFirestoreSessions = async () => {
       try {
         const ref = doc(db, 'user_screen_companion_records', currentUser.uid);
@@ -290,14 +290,14 @@ export const AIScreenCompanionModal: React.FC<AIScreenCompanionModalProps> = ({
       localStorage.setItem(STORAGE_SESSIONS_KEY, JSON.stringify(updated.slice(0, 15)));
     } catch {}
 
-    if (currentUser?.uid) {
+    if (auth.currentUser && auth.currentUser.uid === currentUser?.uid) {
       try {
         const ref = doc(db, 'user_screen_companion_records', currentUser.uid);
         setDoc(ref, {
           user_id: currentUser.uid,
           sessions: updated.slice(0, 15),
           updated_at: new Date().toISOString(),
-        });
+        }).catch((err) => console.warn('Firestore companion save error:', err));
       } catch (err) {
         console.warn('Firestore companion save error:', err);
       }

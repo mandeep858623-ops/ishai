@@ -1,14 +1,22 @@
 import fs from 'fs';
 import path from 'path';
 
-const DATA_DIR = path.join(process.cwd(), 'server', 'data');
-const UPLOADS_DIR = path.join(process.cwd(), 'server', 'uploads');
+const IS_VERCEL = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'ishai-data') : path.join(process.cwd(), 'server', 'data');
+const UPLOADS_DIR = IS_VERCEL ? path.join('/tmp', 'ishai-uploads') : path.join(process.cwd(), 'server', 'uploads');
 const FILES_META_FILE = path.join(DATA_DIR, 'user_files.json');
 const RECORDS_FILE = path.join(DATA_DIR, 'user_records.json');
 
-// Ensure directories exist
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+function ensureStorageDirs() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  } catch (err) {
+    console.warn('[UserStorage] Unable to create storage directories:', err);
+  }
+}
+
+ensureStorageDirs();
 
 export interface UserFileMeta {
   fileId: string;
@@ -45,6 +53,7 @@ function loadFilesMeta(): UserFileMeta[] {
 
 function saveFilesMeta(files: UserFileMeta[]) {
   try {
+    ensureStorageDirs();
     fs.writeFileSync(FILES_META_FILE, JSON.stringify(files, null, 2), 'utf-8');
   } catch (err) {
     console.error('[UserStorage] Failed to save user_files.json:', err);
@@ -64,6 +73,7 @@ function loadRecords(): UserRecord[] {
 
 function saveRecords(records: UserRecord[]) {
   try {
+    ensureStorageDirs();
     fs.writeFileSync(RECORDS_FILE, JSON.stringify(records, null, 2), 'utf-8');
   } catch (err) {
     console.error('[UserStorage] Failed to save user_records.json:', err);

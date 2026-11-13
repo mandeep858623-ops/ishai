@@ -178,8 +178,8 @@ export const WhiteboardModal: React.FC<WhiteboardModalProps> = ({
       console.warn('Local board cache load error:', e);
     }
 
-    // Connect to Firestore if signed in
-    if (!userId || userId === 'guest') {
+    // Connect to Firestore only if Firebase Auth UID matches userId
+    if (!auth.currentUser || auth.currentUser.uid !== userId) {
       return;
     }
 
@@ -306,8 +306,8 @@ export const WhiteboardModal: React.FC<WhiteboardModalProps> = ({
         return updatedList;
       });
 
-      // If user is authenticated, sync with Firestore
-      if (userId && userId !== 'guest') {
+      // If user is authenticated in Firebase, sync with Firestore
+      if (auth.currentUser && auth.currentUser.uid === userId) {
         try {
           await updateDoc(doc(db, 'whiteboards', activeBoard.id), {
             data: snapshot,
@@ -357,8 +357,8 @@ export const WhiteboardModal: React.FC<WhiteboardModalProps> = ({
     setShowTemplatesModal(false);
     writeLog(`Created new board: "${title}"`, 'WHITEBOARD');
 
-    // If authenticated, push to Firestore
-    if (userId && userId !== 'guest') {
+    // If authenticated in Firebase, push to Firestore
+    if (auth.currentUser && auth.currentUser.uid === userId) {
       try {
         const docRef = await addDoc(collection(db, 'whiteboards'), {
           title,
@@ -406,7 +406,7 @@ export const WhiteboardModal: React.FC<WhiteboardModalProps> = ({
       setActiveBoard(remaining.length > 0 ? remaining[0] : null);
     }
 
-    if (userId && userId !== 'guest') {
+    if (auth.currentUser && auth.currentUser.uid === userId) {
       try {
         await deleteDoc(doc(db, 'whiteboards', id));
       } catch (err) {
@@ -450,7 +450,7 @@ export const WhiteboardModal: React.FC<WhiteboardModalProps> = ({
       setActiveBoard((prev) => (prev ? { ...prev, title: updatedTitle } : null));
     }
 
-    if (userId && userId !== 'guest') {
+    if (auth.currentUser && auth.currentUser.uid === userId) {
       try {
         await updateDoc(doc(db, 'whiteboards', isRenaming), {
           title: updatedTitle,

@@ -3,7 +3,7 @@ import { ModalWrapper } from './Modals';
 import { soundEngine } from '../utils/audio';
 import { UserProfile } from '../../server/authService';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebaseConfig';
+import { db, auth } from '../firebaseConfig';
 import { 
   Clock, 
   Play, 
@@ -183,7 +183,7 @@ export const FocusStudioModal: React.FC<FocusStudioModalProps> = ({
   // Load state from Firestore on mount
   useEffect(() => {
     async function loadFromFirestore() {
-      if (!userKey || userKey === 'guest_local') return;
+      if (!auth.currentUser || auth.currentUser.uid !== userKey) return;
       setIsCloudSyncing(true);
       try {
         const docRef = doc(db, 'user_focus_records', userKey);
@@ -211,9 +211,9 @@ export const FocusStudioModal: React.FC<FocusStudioModalProps> = ({
     localStorage.setItem(`${STORAGE_KEY_PREFIX}_goals_${userKey}`, JSON.stringify(goals));
     localStorage.setItem(`${STORAGE_KEY_PREFIX}_history_${userKey}`, JSON.stringify(sessionHistory));
 
-    // Firestore sync / backend record persistence
+    // Firestore sync only when Firebase Auth UID matches userKey
     async function syncToFirestore() {
-      const path = `user_focus_records/${userKey}`;
+      if (!auth.currentUser || auth.currentUser.uid !== userKey) return;
       try {
         await setDoc(doc(db, 'user_focus_records', userKey), {
           user_id: userKey,
@@ -225,7 +225,6 @@ export const FocusStudioModal: React.FC<FocusStudioModalProps> = ({
         });
       } catch (err) {
         console.warn('[Firestore Sync] Focus records sync error:', err);
-        handleFirestoreError(err, OperationType.WRITE, path);
       }
     }
     syncToFirestore();

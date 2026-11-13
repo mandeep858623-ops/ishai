@@ -23,7 +23,7 @@ export function getHoloStatus() {
     success: true,
     status: process.env.GEMINI_API_KEY ? 'online' : 'offline',
     timestamp: new Date().toISOString(),
-    engine: 'Gemini 3.8 Flash',
+    engine: 'Gemini 4 Hydrogen',
   };
 }
 
@@ -354,11 +354,10 @@ export async function processHoloChat(reqBody: HoloChatRequest): Promise<HoloCha
     if (activeNote && activeNote.trim().length > 20) {
       try {
         const response = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-4-hydrogen',
           contents: `Please summarize this active document concisely in 2-3 clear sentences:\n\n${activeNote.slice(0, 3000)}`,
           config: {
             systemInstruction: 'You are HOLO AI providing a concise, high-impact summary of the user document.',
-            temperature: 0.3,
           },
         });
         const summaryText = response.text?.trim() || 'Here is the summary of your current document.';
@@ -417,7 +416,7 @@ export async function processHoloChat(reqBody: HoloChatRequest): Promise<HoloCha
     };
 
     const contents = [...compactHistory, userPart];
-    const modelsToTry = ['models/gemini-3.8-flash', 'models/gemini-flash-latest', 'models/gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let rawResponse = '';
 
     for (const model of modelsToTry) {
@@ -543,11 +542,10 @@ export async function streamHoloChat(req: Request, res: Response) {
     if (activeNote && activeNote.trim().length > 20) {
       try {
         const stream = await ai.models.generateContentStream({
-          model: 'gemini-3.1-flash-lite',
+          model: 'gemini-4-hydrogen',
           contents: `Please summarize this active document concisely in 2-3 clear sentences:\n\n${activeNote.slice(0, 3000)}`,
           config: {
             systemInstruction: 'You are HOLO AI providing a concise summary.',
-            temperature: 0.3,
           },
         });
         let full = '';
@@ -590,7 +588,7 @@ export async function streamHoloChat(req: Request, res: Response) {
       },
     ];
 
-    const modelsToTry = ['models/gemini-3.8-flash', 'models/gemini-flash-latest', 'models/gemini-3.1-flash-lite'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let streamSuccess = false;
     let fullAccumulated = '';
 

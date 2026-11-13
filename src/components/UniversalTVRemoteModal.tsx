@@ -46,7 +46,7 @@ import {
   Check
 } from 'lucide-react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { db, auth } from '../firebaseConfig';
 
 export type TVManufacturer = 
   | 'samsung'
@@ -273,9 +273,9 @@ export const UniversalTVRemoteModal: React.FC<UniversalTVRemoteModalProps> = ({
     }
   };
 
-  // Load Firestore Saved Devices if user logged in
+  // Load Firestore Saved Devices if user logged in with Firebase Auth
   useEffect(() => {
-    if (!currentUser?.uid) return;
+    if (!auth.currentUser || auth.currentUser.uid !== currentUser?.uid) return;
     const loadFirestoreDevices = async () => {
       try {
         const ref = doc(db, 'user_remote_records', currentUser.uid);
@@ -305,7 +305,7 @@ export const UniversalTVRemoteModal: React.FC<UniversalTVRemoteModalProps> = ({
 
   // Save to Firestore helper
   const syncDevicesToFirestore = async (devices: TVDeviceConfig[], activeId: string) => {
-    if (!currentUser?.uid) return;
+    if (!auth.currentUser || auth.currentUser.uid !== currentUser?.uid) return;
     try {
       const ref = doc(db, 'user_remote_records', currentUser.uid);
       await setDoc(ref, {

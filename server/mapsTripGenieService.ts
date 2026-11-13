@@ -51,54 +51,64 @@ Transport Mode: ${transportMode}.
 
 Provide a detailed itinerary with coordinates for each stop so I can render them on a map.`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
-    contents: prompt,
-    config: {
-      systemInstruction,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          description: { type: Type.STRING },
-          totalDistance: { type: Type.STRING },
-          totalDuration: { type: Type.STRING },
-          days: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                day: { type: Type.NUMBER },
-                theme: { type: Type.STRING },
-                activities: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      time: { type: Type.STRING },
-                      locationName: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                      lat: { type: Type.NUMBER },
-                      lng: { type: Type.NUMBER },
-                      type: { type: Type.STRING }
-                    },
-                    required: ["time", "locationName", "description", "lat", "lng", "type"]
-                  }
-                }
-              },
-              required: ["day", "theme", "activities"]
-            }
-          }
-        },
-        required: ["title", "description", "days"]
-      }
-    }
-  });
+  const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+  let lastError: any = null;
 
-  if (!response.text) {
-    throw new Error("Failed to generate itinerary");
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              description: { type: Type.STRING },
+              totalDistance: { type: Type.STRING },
+              totalDuration: { type: Type.STRING },
+              days: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    day: { type: Type.NUMBER },
+                    theme: { type: Type.STRING },
+                    activities: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          time: { type: Type.STRING },
+                          locationName: { type: Type.STRING },
+                          description: { type: Type.STRING },
+                          lat: { type: Type.NUMBER },
+                          lng: { type: Type.NUMBER },
+                          type: { type: Type.STRING }
+                        },
+                        required: ["time", "locationName", "description", "lat", "lng", "type"]
+                      }
+                    }
+                  },
+                  required: ["day", "theme", "activities"]
+                }
+              }
+            },
+            required: ["title", "description", "days"]
+          }
+        }
+      });
+
+      if (response.text) {
+        return JSON.parse(response.text);
+      }
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[MapsTripGenie] Model ${model} failed:`, err?.message || err);
+    }
   }
 
-  return JSON.parse(response.text);
+  throw new Error(lastError?.message || "Failed to generate itinerary");
 }

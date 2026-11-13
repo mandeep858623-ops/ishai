@@ -2,14 +2,25 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-const DATA_DIR = path.join(process.cwd(), 'server', 'data');
+const IS_VERCEL = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+const DATA_DIR = IS_VERCEL
+  ? path.join('/tmp', 'ishai-data')
+  : path.join(process.cwd(), 'server', 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const TOKEN_SECRET = process.env.SESSION_SECRET || process.env.GEMINI_API_KEY || 'ishai-os-session-fallback-v1';
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+function ensureDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('[AuthService] Unable to initialize data directory:', err);
+  }
 }
+
+ensureDataDir();
 
 export interface UserProfile {
   uid: string;
@@ -45,6 +56,7 @@ function loadUsers(): StoredUser[] {
 
 function saveUsers(users: StoredUser[]) {
   try {
+    ensureDataDir();
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
   } catch (err) {
     console.error('[AuthService] Failed to save users.json:', err);
@@ -64,6 +76,7 @@ function loadSessions(): SessionRecord[] {
 
 function saveSessions(sessions: SessionRecord[]) {
   try {
+    ensureDataDir();
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), 'utf-8');
   } catch (err) {
     console.error('[AuthService] Failed to save sessions.json:', err);
@@ -77,15 +90,54 @@ function hashPassword(password: string, saltHex?: string): { hash: string; salt:
   return { hash, salt };
 }
 
+function signStatelessToken(profile: UserProfile, expiresAtMs: number): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      uid: profile.uid,
+      fullName: profile.fullName,
+      email: profile.email,
+      role: profile.role,
+      exp: expiresAtMs,
+    })
+  ).toString('base64url');
+  const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
+  return `ishai_v1.${payload}.${sig}`;
+}
+
+function verifyStatelessToken(token: string): UserProfile | null {
+  if (!token.startsWith('ishai_v1.')) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [, payload, sig] = parts;
+  const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('base64url');
+  if (sig.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    if (!parsed.uid || !parsed.exp || Date.now() > Number(parsed.exp)) return null;
+    return {
+      uid: parsed.uid,
+      fullName: parsed.fullName || 'ISHAI User',
+      email: parsed.email || '',
+      role: parsed.role || 'user',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Create Session Token
-function createSession(uid: string): string {
-  const token = crypto.randomBytes(32).toString('hex');
+function createSession(profile: UserProfile): string {
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
+  const expiresAtMs = now.getTime() + 30 * 24 * 60 * 60 * 1000; // 30 days
+  const token = signStatelessToken(profile, expiresAtMs);
+  const expiresAt = new Date(expiresAtMs).toISOString();
   const sessions = loadSessions().filter((s) => new Date(s.expiresAt) > new Date());
   sessions.push({
     token,
-    uid,
+    uid: profile.uid,
     createdAt: now.toISOString(),
     expiresAt,
   });
@@ -120,6 +172,18 @@ export function verifySession(token?: string): UserProfile | null {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  // Stateless HMAC token check works across ephemeral Vercel serverless lambdas
+  const stateless = verifyStatelessToken(cleanToken);
+  if (stateless) {
+    const users = loadUsers();
+    const user = users.find((u) => u.uid === stateless.uid);
+    if (user) {
+      const { passwordHash, salt, ...profile } = user;
+      return profile;
+    }
+    return stateless;
   }
 
   const sessions = loadSessions();
@@ -180,8 +244,8 @@ export function signUpUser(params: {
   users.push(newUser);
   saveUsers(users);
 
-  const token = createSession(uid);
   const { passwordHash: _, salt: __, ...profile } = newUser;
+  const token = createSession(profile);
 
   return { user: profile, token };
 }
@@ -211,8 +275,8 @@ export function signInUser(params: {
     throw new Error('Invalid credentials. Please check your email and password.');
   }
 
-  const token = createSession(user.uid);
   const { passwordHash: _, salt: __, ...profile } = user;
+  const token = createSession(profile);
 
   return { user: profile, token };
 }

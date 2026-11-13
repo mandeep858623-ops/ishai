@@ -81,13 +81,19 @@ const ai = new GoogleGenAI({
   },
 });
 
+const IS_VERCEL = Boolean(process.env.VERCEL || process.env.VERCEL_ENV);
+const UPLOADS_BASE_DIR = IS_VERCEL
+  ? path.join('/tmp', 'ishai-uploads')
+  : path.join(process.cwd(), 'server', 'uploads');
+
 const app = express();
 const port = process.env.APP_PORT ? parseInt(process.env.APP_PORT, 10) : (process.env.PORT && process.env.PORT !== '8080' ? parseInt(process.env.PORT, 10) : 3000);
 
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+app.use('/assets', express.static(path.join(process.cwd(), 'public', 'assets')));
 app.use('/videos', express.static(path.join(process.cwd(), 'public', 'videos')));
-app.use('/uploads', express.static(path.join(process.cwd(), 'server', 'uploads')));
+app.use('/uploads', express.static(UPLOADS_BASE_DIR));
 app.use('/api/location-share', locationShareRouter);
 app.use('/api/cyber', cyberRouter);
 
@@ -173,27 +179,45 @@ app.post('/api/ai/whiteboard/ocr', async (req, res) => {
     const cleanBase64 = imageBase64.replace(/^data:.*?;base64,/, '');
     const cleanMime = (mimeType || 'image/jpeg').split(';')[0];
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        {
-          role: 'user',
-          parts: [
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+    let text = '';
+    let lastError: any;
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [
             {
-              inlineData: {
-                mimeType: cleanMime,
-                data: cleanBase64,
-              },
-            },
-            {
-              text: 'You are an advanced handwriting and diagram recognition AI. Transcribe all handwritten words, diagrams, text boxes, and mathematical/logical annotations from this whiteboard canvas accurately. Format each distinct note or line separately. If no handwriting is present, describe any drawings or symbols clearly.',
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: cleanMime,
+                    data: cleanBase64,
+                  },
+                },
+                {
+                  text: 'You are an advanced handwriting and diagram recognition AI. Transcribe all handwritten words, diagrams, text boxes, and mathematical/logical annotations from this whiteboard canvas accurately. Format each distinct note or line separately. If no handwriting is present, describe any drawings or symbols clearly.',
+                },
+              ],
             },
           ],
-        },
-      ],
-    });
+        });
+        if (response?.text) {
+          text = response.text;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[Whiteboard OCR] Model ${model} failed:`, err?.message || err);
+      }
+    }
 
-    const text = response.text || '';
+    if (!text && lastError) {
+      throw lastError;
+    }
+
     return res.json({ success: true, text });
   } catch (err: any) {
     console.error('Whiteboard OCR error:', err);
@@ -314,6 +338,16 @@ app.post('/api/weather/intelligence', async (req, res) => {
   }
 });
 
+
+app.post('/api/ai/video-editor/captions', async (req, res) => {
+  try {
+    const subtitles = await generateSmartCaptions(req.body);
+    return res.json({ success: true, subtitles });
+  } catch (err: any) {
+    console.error('Video Editor captions error:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to generate captions' });
+  }
+});
 
 app.post('/api/ai/video-editor/metadata-ideas', async (req, res) => {
   try {
@@ -688,7 +722,8 @@ app.post('/api/vault/upload-photo', async (req, res) => {
     const cleanBase64 = rawData.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
     const fileBuffer = Buffer.from(cleanBase64, 'base64');
 
-    const uploadsDir = path.join(process.cwd(), 'server', 'uploads', ownerUid);
+    const safeOwnerUid = String(ownerUid).replace(/[^a-zA-Z0-9_-]/g, '_') || 'guest_default';
+    const uploadsDir = path.join(UPLOADS_BASE_DIR, safeOwnerUid);
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
@@ -731,10 +766,11 @@ app.get('/api/vault/photos/:ownerUid', async (req, res) => {
       type: string;
     }> = [];
 
-    const dirsToScan = [path.join(process.cwd(), 'server', 'uploads', ownerUid)];
+    const safeOwnerUid = String(ownerUid).replace(/[^a-zA-Z0-9_-]/g, '_') || 'guest_default';
+    const dirsToScan = [path.join(UPLOADS_BASE_DIR, safeOwnerUid)];
     // Also include guest_default photos if authenticated user is accessing
-    if (ownerUid !== 'guest_default') {
-      dirsToScan.push(path.join(process.cwd(), 'server', 'uploads', 'guest_default'));
+    if (safeOwnerUid !== 'guest_default') {
+      dirsToScan.push(path.join(UPLOADS_BASE_DIR, 'guest_default'));
     }
 
     for (const uploadDir of dirsToScan) {
@@ -784,11 +820,11 @@ app.delete('/api/vault/photo', async (req, res) => {
     // Check if url points to /uploads/...
     if (url && typeof url === 'string' && url.startsWith('/uploads/')) {
       const relativePath = url.replace(/^\/uploads\//, '');
-      const safeFullPath = path.join(process.cwd(), 'server', 'uploads', relativePath);
-      const baseUploads = path.join(process.cwd(), 'server', 'uploads');
+      const baseUploads = path.resolve(UPLOADS_BASE_DIR);
+      const safeFullPath = path.resolve(baseUploads, relativePath);
 
-      // Security check: ensure path is within server/uploads
-      if (safeFullPath.startsWith(baseUploads) && fs.existsSync(safeFullPath)) {
+      // Security check: ensure path is within UPLOADS_BASE_DIR
+      if (safeFullPath.startsWith(baseUploads + path.sep) && fs.existsSync(safeFullPath)) {
         try {
           fs.unlinkSync(safeFullPath);
           deleted = true;
@@ -808,7 +844,7 @@ app.delete('/api/vault/photo', async (req, res) => {
 // ============================================================================
 // FOCUS STUDIO AI COACH ENDPOINT
 // ============================================================================
-app.post('/api/focus/coach', requireAuth, async (req: any, res: any) => {
+app.post('/api/focus/coach', optionalAuth, async (req: any, res: any) => {
   try {
     const advice = await getFocusCoachAdvice(req.body);
     return res.json({ success: true, advice });
@@ -821,7 +857,7 @@ app.post('/api/focus/coach', requireAuth, async (req: any, res: any) => {
 // ============================================================================
 // SUPERAI SMART CLOCK AI PLANNER
 // ============================================================================
-app.post('/api/ai/clock/plan', requireAuth, async (req: any, res: any) => {
+app.post('/api/ai/clock/plan', optionalAuth, async (req: any, res: any) => {
   try {
     const { prompt, existingTasks, existingEvents, existingHabits, upcomingCountdowns } = req.body;
     const plan = await generateAIPersonalPlan(ai, {
@@ -838,7 +874,7 @@ app.post('/api/ai/clock/plan', requireAuth, async (req: any, res: any) => {
   }
 });
 
-app.post('/api/ai/maps/trip-genie', requireAuth, async (req: any, res: any) => {
+app.post('/api/ai/maps/trip-genie', optionalAuth, async (req: any, res: any) => {
   try {
     const itinerary = await generateAITripItinerary(ai, req.body);
     return res.json({ success: true, itinerary });
@@ -850,6 +886,17 @@ app.post('/api/ai/maps/trip-genie', requireAuth, async (req: any, res: any) => {
 
 
 // Auth Middleware
+function optionalAuth(req: any, _res: any, next: any) {
+  const token = req.headers.authorization || req.headers['x-user-token'];
+  if (token) {
+    const user = verifySession(token as string);
+    if (user) {
+      req.user = user;
+    }
+  }
+  next();
+}
+
 function requireAuth(req: any, res: any, next: any) {
   const token = req.headers.authorization || req.headers['x-user-token'];
   const user = verifySession(token as string);
@@ -1021,8 +1068,7 @@ app.post('/api/ai/language-studio', async (req, res) => {
       return res.json({ result: cached.result, success: true, cached: true });
     }
 
-    // gemini-3.1-flash-lite has the fastest TTFT and highest throughput
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let resultText = '';
     
     for (const model of modelsToTry) {
@@ -1032,7 +1078,6 @@ app.post('/api/ai/language-studio', async (req, res) => {
           contents: finalPrompt,
           config: {
             systemInstruction,
-            temperature: 0.5,
           },
         });
         if (response && response.text) {
@@ -1091,7 +1136,7 @@ app.post(['/api/ai/chat/stream', '/api/ai/chat-stream'], async (req, res) => {
       }
     }
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let stream;
 
     for (const model of modelsToTry) {
@@ -1158,7 +1203,7 @@ app.post('/api/ai/chat', async (req, res) => {
       }
     }
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let response: any;
 
     for (const model of modelsToTry) {
@@ -1264,8 +1309,7 @@ app.post('/api/ai/language-studio/stream', async (req, res) => {
       return res.end();
     }
 
-    // gemini-3.1-flash-lite provides sub-second first-token latency
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let stream;
     for (const model of modelsToTry) {
       try {
@@ -1274,7 +1318,6 @@ app.post('/api/ai/language-studio/stream', async (req, res) => {
           contents: finalPrompt,
           config: {
             systemInstruction,
-            temperature: 0.5,
           },
         });
         if (stream) break;
@@ -1308,17 +1351,47 @@ app.post('/api/ai/language-studio/stream', async (req, res) => {
   }
 });
 
-// Crystal-clear Text-To-Speech audio stream route (works across all browsers and phones)
+// Crystal-clear Text-To-Speech audio stream route (Gemini TTS primary + HTTP fallback)
 app.get('/api/ai/tts', async (req, res) => {
   try {
     const text = req.query.text as string;
+    const voiceParam = ((req.query.voice as string) || 'female').toLowerCase();
     if (!text || typeof text !== 'string') {
       return res.status(400).send('Text is required');
     }
 
-    const clean = text.slice(0, 180).trim();
+    const clean = text.slice(0, 450).trim();
+    const voiceName = voiceParam === 'male' ? 'Charon' : 'Kore';
+
+    // 1. Primary: Gemini 3.8 Flash Lite TTS (returns WAV binary directly)
+    try {
+      const ttsRes = await ai.models.generateContent({
+        model: 'gemini-3.8-flash-lite-tts',
+        contents: [{ role: 'user', parts: [{ text: clean }] }],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName },
+            },
+          },
+        },
+      });
+      const inlineAudio = ttsRes?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      if (inlineAudio?.data) {
+        const audioBuf = Buffer.from(inlineAudio.data, 'base64');
+        res.setHeader('Content-Type', inlineAudio.mimeType || 'audio/wav');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(audioBuf);
+      }
+    } catch (geminiTtsErr: any) {
+      console.warn('[TTS] Gemini TTS unavailable, using fallback:', geminiTtsErr?.message || geminiTtsErr);
+    }
+
+    // 2. Reliable Fallback: Google Translate TTS MP3
+    const fallbackClean = clean.slice(0, 180);
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en&q=${encodeURIComponent(
-      clean
+      fallbackClean
     )}`;
 
     const controller = new AbortController();
@@ -1513,6 +1586,318 @@ app.post('/api/ai/songs', async (req, res) => {
   } catch (err: any) {
     console.error('Song search route error:', err);
     return res.json({ tracks: CURATED_MP3_SONGS });
+  }
+});
+
+// AI Song Composition Generator (Restored for SongMakerModal)
+app.post('/api/ai/song/generate', async (req, res) => {
+  try {
+    const {
+      prompt,
+      genre = 'Electronic',
+      mood = 'Energetic',
+      language = 'English',
+      vocalPreference = 'Vocals',
+      title,
+      theme,
+      tempo,
+      duration,
+    } = req.body;
+
+    const topicText = (prompt || theme || title || `${mood} ${genre} song`).toString().trim();
+    const targetBpm = typeof tempo === 'number' && tempo >= 60 && tempo <= 190 ? tempo : 118;
+
+    const songPrompt = `You are a chart-topping songwriter, composer, and music producer.
+Create a complete, original song composition based on:
+Prompt/Topic: "${topicText}"
+Genre: ${genre}
+Mood: ${mood}
+Language: ${language}
+Vocal Preference: ${vocalPreference}
+Target Tempo BPM: ${targetBpm}
+${title ? `Preferred Title: ${title}` : ''}
+${duration ? `Target Duration: ${duration}` : ''}
+
+Return ONLY valid JSON matching this exact structure (no markdown backticks):
+{
+  "title": "Song Title",
+  "genre": "${genre}",
+  "mood": "${mood}",
+  "tempoBpm": ${targetBpm},
+  "musicalKey": "Am",
+  "scale": "minor",
+  "chordProgression": ["Am", "F", "C", "G"],
+  "suggestedInstruments": ["Analog Synth", "808 Bass", "Crisp Drums", "Electric Guitar"],
+  "vocalStyle": "Expressive studio lead vocal",
+  "audioPrompt": "Studio production description for synthesizers",
+  "sections": [
+    {
+      "name": "Verse 1",
+      "type": "verse",
+      "chords": ["Am", "F", "C", "G"],
+      "lines": ["Line 1...", "Line 2...", "Line 3...", "Line 4..."]
+    },
+    {
+      "name": "Chorus",
+      "type": "chorus",
+      "chords": ["F", "C", "G", "Am"],
+      "lines": ["Chorus line 1...", "Chorus line 2...", "Chorus line 3...", "Chorus line 4..."]
+    },
+    {
+      "name": "Verse 2",
+      "type": "verse",
+      "chords": ["Am", "F", "C", "G"],
+      "lines": ["Line 1...", "Line 2...", "Line 3...", "Line 4..."]
+    },
+    {
+      "name": "Bridge",
+      "type": "bridge",
+      "chords": ["Dm", "Am", "F", "E"],
+      "lines": ["Bridge line 1...", "Bridge line 2..."]
+    }
+  ],
+  "fullLyrics": "[Verse 1]\\nLine 1...\\n[Chorus]\\nChorus line 1..."
+}
+Ensure scale is strictly one of "major", "minor", or "pentatonic". Keep chord names standard (C, Cm, Am, F, G, Dm, Em, E, D, A).`;
+
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+    let rawJson = '';
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: songPrompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        });
+        if (response?.text) {
+          rawJson = response.text.trim();
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`[SongMaker] Model ${model} failed:`, err?.message || err);
+      }
+    }
+
+    if (rawJson) {
+      const cleaned = rawJson.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim();
+      try {
+        const parsed = JSON.parse(cleaned);
+        const normalizedScale =
+          parsed.scale === 'major' || parsed.scale === 'minor' || parsed.scale === 'pentatonic'
+            ? parsed.scale
+            : 'minor';
+        const sections = Array.isArray(parsed.sections) && parsed.sections.length > 0 ? parsed.sections : [
+          {
+            name: 'Verse 1',
+            type: 'verse',
+            chords: ['Am', 'F', 'C', 'G'],
+            lines: [`Neon echoes rising from ${topicText}`, 'Rhythm steady under midnight skies'],
+          },
+          {
+            name: 'Chorus',
+            type: 'chorus',
+            chords: ['F', 'C', 'G', 'Am'],
+            lines: [`Hold the frequency of ${title || topicText}`, 'Let the signal carry through the night'],
+          },
+        ];
+        const fullLyrics =
+          typeof parsed.fullLyrics === 'string' && parsed.fullLyrics.trim()
+            ? parsed.fullLyrics
+            : sections.map((s: any) => `[${s.name}]\n${(s.lines || []).join('\n')}`).join('\n\n');
+
+        return res.json({
+          title: parsed.title || title || topicText.slice(0, 36),
+          genre: parsed.genre || genre,
+          mood: parsed.mood || mood,
+          tempoBpm: Number(parsed.tempoBpm) || targetBpm,
+          musicalKey: parsed.musicalKey || 'Am',
+          scale: normalizedScale,
+          chordProgression: Array.isArray(parsed.chordProgression) && parsed.chordProgression.length > 0
+            ? parsed.chordProgression
+            : ['Am', 'F', 'C', 'G'],
+          suggestedInstruments: Array.isArray(parsed.suggestedInstruments) && parsed.suggestedInstruments.length > 0
+            ? parsed.suggestedInstruments
+            : ['Analog Synth', 'Deep Bass', 'Studio Drums'],
+          vocalStyle: parsed.vocalStyle || `${vocalPreference} studio lead`,
+          audioPrompt: parsed.audioPrompt || `${mood} ${genre} track at ${targetBpm} BPM`,
+          sections,
+          fullLyrics,
+        });
+      } catch (parseErr) {
+        console.warn('[SongMaker] JSON parse failed, using structured composition fallback:', parseErr);
+      }
+    }
+
+    // Structured fallback composition if model output was unavailable
+    const fallbackSections = [
+      {
+        name: 'Verse 1',
+        type: 'verse',
+        chords: ['Am', 'F', 'C', 'G'],
+        lines: [
+          `Signal breaking over ${topicText}`,
+          'Every pulse aligned in emerald light',
+          'Sub-bass moving through the open frame',
+          'Turning quiet static into sound tonight',
+        ],
+      },
+      {
+        name: 'Chorus',
+        type: 'chorus',
+        chords: ['F', 'C', 'G', 'Am'],
+        lines: [
+          `${title || topicText} burning bright and clear`,
+          'Feel the ${genre} heartbeat pulling near',
+          'No looking back, the tempo climbs again',
+          'Echoing across the night without an end',
+        ].map((line) => line.replace('${genre}', genre)),
+      },
+    ];
+    return res.json({
+      title: title || topicText.slice(0, 36),
+      genre,
+      mood,
+      tempoBpm: targetBpm,
+      musicalKey: 'Am',
+      scale: 'minor',
+      chordProgression: ['Am', 'F', 'C', 'G'],
+      suggestedInstruments: ['Analog Synth', 'Deep 808 Bass', 'Studio Drums', 'Ambient Pad'],
+      vocalStyle: `${vocalPreference} lead vocal`,
+      audioPrompt: `${mood} ${genre} studio production at ${targetBpm} BPM`,
+      sections: fallbackSections,
+      fullLyrics: fallbackSections.map((s) => `[${s.name}]\n${s.lines.join('\n')}`).join('\n\n'),
+    });
+  } catch (err: any) {
+    console.error('Song generation error:', err);
+    return res.status(500).json({ error: err?.message || 'Failed to generate song composition' });
+  }
+});
+
+// Cityverse AI Urban Architect Endpoint
+app.post('/api/cityverse/ai-prompt', async (req, res) => {
+  try {
+    const prompt = (req.body?.prompt || '').toString().trim();
+    if (!prompt) {
+      return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    const validBuildings = [
+      'res_small_house', 'res_apartment_block', 'res_residential_tower', 'res_luxury_villa',
+      'com_corner_shop', 'com_shopping_mall', 'com_office_tower', 'com_grand_hotel',
+      'ind_factory', 'ind_warehouse', 'ind_solar_plant', 'ind_wind_farm',
+      'pub_school', 'pub_hospital', 'pub_fire_station', 'pub_police_station', 'pub_city_hall',
+      'ent_stadium', 'ent_cinema', 'nat_city_park', 'nat_botanical_garden',
+      'tra_bus_terminal', 'tra_metro_station', 'util_water_facility',
+    ];
+
+    const cityPrompt = `You are Cityverse AI Urban Planner for a 64x64 grid city builder (keep coordinates strictly between 12 and 50).
+User request: "${prompt}"
+
+Allowed action types: "PLACE_BUILDING", "ADD_ROAD", "DEMOLISH", "EDIT_TERRAIN", "PLANT_TREES".
+Allowed buildingDefId values ONLY: ${validBuildings.join(', ')}.
+Allowed terrainType values ONLY: "grass", "water", "sand", "soil", "paved", "concrete".
+
+Return ONLY raw valid JSON (no markdown backticks) matching:
+{
+  "title": "Short urban plan title",
+  "explanation": "1-2 sentence explanation of this urban design batch.",
+  "actions": [
+    {
+      "type": "PLACE_BUILDING",
+      "description": "Place solar power plant",
+      "targetX": 24,
+      "targetZ": 26,
+      "buildingDefId": "ind_solar_plant"
+    },
+    {
+      "type": "ADD_ROAD",
+      "description": "Connect arterial road",
+      "targetX": 24,
+      "targetZ": 25
+    }
+  ]
+}
+Include 4 to 8 cohesive, well-spaced actions without overlapping exact coordinates.`;
+
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+    let rawJson = '';
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: cityPrompt,
+          config: { responseMimeType: 'application/json' },
+        });
+        if (response?.text) {
+          rawJson = response.text.trim();
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`[Cityverse AI] Model ${model} failed:`, err?.message || err);
+      }
+    }
+
+    if (rawJson) {
+      const cleaned = rawJson.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim();
+      try {
+        const parsed = JSON.parse(cleaned);
+        if (Array.isArray(parsed.actions) && parsed.actions.length > 0) {
+          const validTypes = new Set(['PLACE_BUILDING', 'ADD_ROAD', 'DEMOLISH', 'EDIT_TERRAIN', 'PLANT_TREES']);
+          const buildingSet = new Set(validBuildings);
+          const terrainSet = new Set(['grass', 'water', 'sand', 'concrete', 'forest']);
+
+          const sanitizedActions = parsed.actions.slice(0, 12).map((act: any, idx: number) => {
+            const type = validTypes.has(act.type) ? act.type : 'PLACE_BUILDING';
+            const targetX = Math.max(8, Math.min(54, Math.round(Number(act.targetX) || (20 + (idx % 4) * 3))));
+            const targetZ = Math.max(8, Math.min(54, Math.round(Number(act.targetZ) || (20 + Math.floor(idx / 4) * 3))));
+            return {
+              type,
+              description: String(act.description || `${type} at (${targetX}, ${targetZ})`),
+              targetX,
+              targetZ,
+              ...(type === 'PLACE_BUILDING'
+                ? { buildingDefId: buildingSet.has(act.buildingDefId) ? act.buildingDefId : 'res_apartment_block' }
+                : {}),
+              ...(type === 'EDIT_TERRAIN'
+                ? { terrainType: terrainSet.has(act.terrainType) ? act.terrainType : 'grass' }
+                : {}),
+            };
+          });
+
+          return res.json({
+            proposal: {
+              title: parsed.title || 'AI Urban District Proposal',
+              explanation: parsed.explanation || `Generated ${sanitizedActions.length} planning actions for "${prompt}".`,
+              actions: sanitizedActions,
+            },
+          });
+        }
+      } catch (parseErr) {
+        console.warn('[Cityverse AI] Parse warning, using clean blueprint fallback:', parseErr);
+      }
+    }
+
+    return res.json({
+      proposal: {
+        title: 'Balanced Eco-District Layout',
+        explanation: `Prepared a starter civic and residential block aligned to "${prompt}".`,
+        actions: [
+          { type: 'ADD_ROAD', description: 'Build avenue access segment', targetX: 28, targetZ: 28 },
+          { type: 'ADD_ROAD', description: 'Extend boulevard East', targetX: 29, targetZ: 28 },
+          { type: 'PLACE_BUILDING', description: 'Construct modern apartments', targetX: 28, targetZ: 26, buildingDefId: 'res_apartment_block' },
+          { type: 'PLACE_BUILDING', description: 'Install clean solar array', targetX: 30, targetZ: 26, buildingDefId: 'ind_solar_plant' },
+          { type: 'PLACE_BUILDING', description: 'Establish central park', targetX: 28, targetZ: 30, buildingDefId: 'nat_city_park' },
+          { type: 'PLANT_TREES', description: 'Plant perimeter greenbelt', targetX: 30, targetZ: 30 },
+        ],
+      },
+    });
+  } catch (err: any) {
+    console.error('Cityverse AI error:', err);
+    return res.status(500).json({ error: err?.message || 'Cityverse planning failed' });
   }
 });
 
@@ -1714,27 +2099,27 @@ app.post('/api/ai/universal-video-search', async (req, res) => {
 const VERIFIED_PORTRAITS: Record<string, { title: string; url: string; prompt: string }> = {
   arsh: {
     title: 'Arsh (Stylish Portrait with Glasses & Patterned Jacket)',
-    url: '/src/assets/images/arsh_portrait_1792057749180.jpg',
+    url: '/assets/aistudio/image_6f66bc26.png',
     prompt: 'Arsh: Stylish young boy with round black eyeglasses, white turtleneck, and aesthetic patterned blazer jacket with strawberry badge',
   },
   kanishk: {
     title: 'Kanishk (Outdoor Portrait with Backpack)',
-    url: '/src/assets/images/kanishk_portrait_1792057749934.jpg',
+    url: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=1000&auto=format&fit=crop',
     prompt: 'Kanishk: Young boy standing outdoors in navy blue graphic t-shirt with backpack, black joggers, and blue slip-on shoes',
   },
   hiten: {
     title: 'Hiten (School Uniform with Pixel Sunglasses)',
-    url: '/src/assets/images/hiten_portrait_1792057750344.jpg',
+    url: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=1000&auto=format&fit=crop',
     prompt: 'Hiten: Young schoolboy in light blue collared school uniform with pixel 8-bit sunglasses, playfully sticking his tongue out',
   },
   viraj: {
     title: 'Viraj (Classroom Portrait with School Lanyard)',
-    url: '/src/assets/images/viraj_portrait_1792057752080.jpg',
+    url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=1000&auto=format&fit=crop',
     prompt: 'Viraj: Young schoolboy sitting at classroom desk in navy blue polo uniform with school lanyard and badge, smiling politely',
   },
   ayaan: {
     title: 'Ayaan (Stone Steps Outdoor Portrait)',
-    url: '/src/assets/images/ayaan_portrait_1792057750878.jpg',
+    url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=1000&auto=format&fit=crop',
     prompt: 'Ayaan: Young boy sitting calmly on stone steps in white graphic t-shirt, white shorts, and blue sneakers',
   },
   superai: {
@@ -1751,11 +2136,11 @@ const VERIFIED_PORTRAITS: Record<string, { title: string; url: string; prompt: s
 
 // Check if exact uploaded user photos exist and load them
 ['arsh', 'kanishk', 'hiten', 'viraj', 'ayaan'].forEach((name) => {
-  const customPath = path.join(process.cwd(), 'src', 'assets', 'images', `${name}_exact.jpg`);
+  const customPath = path.join(UPLOADS_BASE_DIR, 'friends', `${name}_exact.jpg`);
   if (fs.existsSync(customPath)) {
     VERIFIED_PORTRAITS[name] = {
       title: `${name.toUpperCase()} (Exact Real Photo)`,
-      url: `/src/assets/images/${name}_exact.jpg`,
+      url: `/uploads/friends/${name}_exact.jpg`,
       prompt: `Exact authentic photo of ${name}`,
     };
   }
@@ -1773,14 +2158,14 @@ app.post('/api/ai/upload-friend-photo', (req, res) => {
     const base64Data = imageData.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
     const filename = `${cleanId}_exact.jpg`;
-    const targetDir = path.join(process.cwd(), 'src', 'assets', 'images');
+    const targetDir = path.join(UPLOADS_BASE_DIR, 'friends');
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
     const filePath = path.join(targetDir, filename);
     fs.writeFileSync(filePath, buffer);
 
-    const assetUrl = `/src/assets/images/${filename}`;
+    const assetUrl = `/uploads/friends/${filename}`;
     VERIFIED_PORTRAITS[cleanId] = {
       title: `${cleanId.toUpperCase()} (Exact Real Photo)`,
       url: assetUrl,
@@ -1858,21 +2243,45 @@ app.post('/api/ai/image', async (req, res) => {
 
     // 3. Intelligent AI prompt synthesizer: append style instructions
     let enhanced = cleanPrompt;
-    try {
-      const pResponse = await ai.models.generateContent({
-        model: 'gemini-flash-latest',
-        contents: `You are an AI image prompt enhancer. User query: "${cleanPrompt}".
+    for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const pResponse = await ai.models.generateContent({
+          model,
+          contents: `You are an AI image prompt enhancer. User query: "${cleanPrompt}".
 Enhance the user's prompt for a high-quality, photorealistic 8k image with cinematic lighting and detailed composition. Keep the user's original subject and intent intact.
 Return ONLY the enhanced prompt text, no quotes or intro.`,
-      });
-      if (pResponse && pResponse.text) {
-        enhanced = pResponse.text.trim().replace(/^"|"$/g, '');
+        });
+        if (pResponse && pResponse.text) {
+          enhanced = pResponse.text.trim().replace(/^"|"$/g, '');
+          break;
+        }
+      } catch {
+        enhanced = `${cleanPrompt}, stunning photorealistic 8k photo, cinematic lighting, highly detailed, ultra realistic`;
       }
-    } catch {
-      enhanced = `${cleanPrompt}, stunning photorealistic 8k photo, cinematic lighting, highly detailed, ultra realistic`;
     }
 
-    // 4. Generate image using Pollinations AI (Free and Infinite)
+    // 4. Primary: Real Gemini native image generation via gemini-3.1-flash-lite-image
+    try {
+      const studioResult = await generateStudioImage(ai, {
+        prompt: enhanced,
+        aspectRatio: '1:1',
+        style: 'photorealistic',
+        model: 'gemini-3.1-flash-lite',
+      });
+      if (studioResult?.images?.[0]?.url) {
+        return res.json({
+          imageUrl: studioResult.images[0].url,
+          directUrl: studioResult.images[0].url,
+          enhancedPrompt: enhanced,
+          originalPrompt: cleanPrompt,
+          isRealPhoto: false,
+        });
+      }
+    } catch (geminiImgErr: any) {
+      console.warn('[/api/ai/image] Native Gemini image fallback:', geminiImgErr?.message || geminiImgErr);
+    }
+
+    // 5. Fallback: Generate image using Pollinations AI
     const seed = Math.floor(Math.random() * 900000) + 100000;
     const directUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(
       enhanced
@@ -2028,7 +2437,7 @@ app.get('/api/ai/video-stream/:filename', (req, res) => {
     }
 
     if (!fs.existsSync(videoPath)) {
-      return res.status(404).send('Video file not found');
+      return res.redirect(`/videos/${cleanName}`);
     }
 
     const stat = fs.statSync(videoPath);
@@ -2131,21 +2540,27 @@ Respond ONLY with a valid JSON object matching this schema:
   ]
 }`;
 
-      const aiRes = await ai.models.generateContent({
-        model: 'gemini-flash-latest',
-        contents: aiPrompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
-
-      if (aiRes && aiRes.text) {
-        const parsed = JSON.parse(aiRes.text);
-        if (parsed.enhancedPrompt) {
-          directorNotes = {
-            ...directorNotes,
-            ...parsed,
-          };
+      for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+        try {
+          const aiRes = await ai.models.generateContent({
+            model,
+            contents: aiPrompt,
+            config: {
+              responseMimeType: 'application/json',
+            },
+          });
+          if (aiRes && aiRes.text) {
+            const parsed = JSON.parse(aiRes.text);
+            if (parsed.enhancedPrompt) {
+              directorNotes = {
+                ...directorNotes,
+                ...parsed,
+              };
+            }
+            break;
+          }
+        } catch (modelErr: any) {
+          console.warn(`[Video Director] Model ${model} failed:`, modelErr?.message || modelErr);
         }
       }
     } catch (e) {
@@ -2255,6 +2670,230 @@ app.get('/api/ai/video-proxy', async (req, res) => {
       return fs.createReadStream(fallbackLocal).pipe(res);
     }
     return res.status(502).send('Video proxy error');
+  }
+});
+
+// ============================================================================
+// GEMINI OMNI 1.2 FLASH AI VIDEO GENERATION (INTERACTIONS API)
+// ============================================================================
+const generatedVideoCache = new Map<string, { buffer: Buffer; mimeType: string; createdAt: number }>();
+
+function extractVideoFromInteraction(interaction: any): { data?: string; uri?: string; mime_type?: string } | null {
+  if (!interaction) return null;
+  if (interaction.output_video && (interaction.output_video.data || interaction.output_video.uri)) {
+    return interaction.output_video;
+  }
+  if (Array.isArray(interaction.outputs)) {
+    const vidOut = interaction.outputs.find((o: any) => o?.type === 'video' && (o.data || o.uri));
+    if (vidOut) return vidOut;
+  }
+  if (Array.isArray(interaction.steps)) {
+    for (const step of interaction.steps) {
+      if (step?.type === 'model_output' && Array.isArray(step.content)) {
+        const vidContent = step.content.find((c: any) => c?.type === 'video' && (c.data || c.uri));
+        if (vidContent) return vidContent;
+      }
+    }
+  }
+  return null;
+}
+
+app.post('/api/ai/video/generate', async (req, res) => {
+  try {
+    const {
+      prompt,
+      aspectRatio = '16:9',
+      duration = '5s',
+      resolution = '720p',
+      imageBase64,
+      imageMimeType = 'image/png',
+      previousInteractionId,
+    } = req.body;
+
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ success: false, error: 'Video prompt is required.' });
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({
+        success: false,
+        error: 'GEMINI_API_KEY is not configured on the server.',
+      });
+    }
+
+    const inputParts: any[] = [{ type: 'text', text: prompt.trim() }];
+    if (imageBase64 && typeof imageBase64 === 'string') {
+      const cleanImg = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+      const detectedMime = imageBase64.match(/^data:(image\/[a-zA-Z+]+);base64,/)?.[1] || imageMimeType;
+      inputParts.push({
+        type: 'image',
+        data: cleanImg,
+        mime_type: detectedMime,
+      });
+    }
+
+    const validAspect = aspectRatio === '9:16' ? '9:16' : '16:9';
+    const validDuration = ['5s', '8s', '10s', '15s'].includes(duration) ? duration : '5s';
+    const validResolution = ['360p', '720p', '1080p'].includes(resolution) ? resolution : '720p';
+
+    const interaction = await (ai.interactions as any).create({
+      model: 'gemini-omni-1.2-flash',
+      input: inputParts,
+      background: true,
+      store: true,
+      ...(previousInteractionId ? { previous_interaction_id: previousInteractionId } : {}),
+      response_format: {
+        type: 'video',
+        aspect_ratio: validAspect,
+        duration: validDuration,
+        resolution: validResolution,
+      },
+    });
+
+    return res.json({
+      success: true,
+      interactionId: interaction.id,
+      status: interaction.status || 'in_progress',
+      videoUrl: `/api/ai/video/content/${interaction.id}`,
+      downloadUrl: `/api/ai/video/content/${interaction.id}?download=true`,
+    });
+  } catch (err: any) {
+    console.error('[Omni Video Generate] Error:', err);
+    const status = Number(err?.status || err?.code) || 500;
+    const msg = err?.message || 'AI video generation failed.';
+    const friendlyMsg =
+      status === 403 || status === 429 || /billing|quota|permission/i.test(msg)
+        ? `Gemini Omni Video requires a billing-enabled or quota-available GEMINI_API_KEY (${msg}).`
+        : msg;
+    return res.status(status >= 400 && status < 600 ? status : 500).json({
+      success: false,
+      error: friendlyMsg,
+    });
+  }
+});
+
+app.get('/api/ai/video/status/:interactionId', async (req, res) => {
+  try {
+    const { interactionId } = req.params;
+    if (!interactionId) {
+      return res.status(400).json({ success: false, error: 'interactionId is required' });
+    }
+
+    const interaction = await (ai.interactions as any).get(interactionId);
+    const status = interaction?.status || 'in_progress';
+    const isCompleted = status === 'completed';
+
+    return res.json({
+      success: true,
+      interactionId,
+      status,
+      ready: isCompleted,
+      videoUrl: `/api/ai/video/content/${interactionId}`,
+      downloadUrl: `/api/ai/video/content/${interactionId}?download=true`,
+      error: interaction?.error?.message || interaction?.error || null,
+    });
+  } catch (err: any) {
+    console.error('[Omni Video Status] Error:', err);
+    return res.status(500).json({
+      success: false,
+      status: 'failed',
+      ready: false,
+      error: err?.message || 'Failed to check video generation status.',
+    });
+  }
+});
+
+app.get('/api/ai/video/content/:interactionId', async (req, res) => {
+  try {
+    const { interactionId } = req.params;
+    const download = req.query.download === 'true';
+    const filename = (req.query.filename as string) || `ISHAI_AI_Video_${interactionId.slice(-8)}.mp4`;
+
+    if (!interactionId) {
+      return res.status(400).send('interactionId is required');
+    }
+
+    let cached = generatedVideoCache.get(interactionId);
+    if (!cached) {
+      const interaction = await (ai.interactions as any).get(interactionId);
+      if (interaction?.status !== 'completed') {
+        return res.status(202).json({
+          success: false,
+          status: interaction?.status || 'in_progress',
+          message: 'Video generation still in progress.',
+        });
+      }
+
+      const videoObj = extractVideoFromInteraction(interaction);
+      if (!videoObj) {
+        return res.status(404).json({ success: false, error: 'No video output found in completed interaction.' });
+      }
+
+      let videoBuffer: Buffer | null = null;
+      const mimeType = videoObj.mime_type || 'video/mp4';
+
+      if (videoObj.data) {
+        videoBuffer = Buffer.from(videoObj.data, 'base64');
+      } else if (videoObj.uri) {
+        const videoRes = await fetch(videoObj.uri, {
+          headers: {
+            'x-goog-api-key': process.env.GEMINI_API_KEY || '',
+          },
+        });
+        if (!videoRes.ok) {
+          return res.status(502).send(`Failed to retrieve generated video (${videoRes.status})`);
+        }
+        const arrayBuf = await videoRes.arrayBuffer();
+        videoBuffer = Buffer.from(arrayBuf);
+      }
+
+      if (!videoBuffer) {
+        return res.status(404).send('Empty video content');
+      }
+
+      // Evict oldest cache entries if needed to stay memory safe
+      if (generatedVideoCache.size >= 8) {
+        const oldestKey = generatedVideoCache.keys().next().value;
+        if (oldestKey) generatedVideoCache.delete(oldestKey);
+      }
+      cached = { buffer: videoBuffer, mimeType, createdAt: Date.now() };
+      generatedVideoCache.set(interactionId, cached);
+    }
+
+    const { buffer, mimeType } = cached;
+    const fileSize = buffer.length;
+    const range = req.headers.range;
+
+    if (download) {
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    }
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      if (start >= fileSize || start < 0 || end >= fileSize) {
+        return res.status(416).send(`Requested range not satisfiable`);
+      }
+      const chunk = buffer.subarray(start, end + 1);
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunk.length,
+        'Content-Type': mimeType,
+        'Cache-Control': 'public, max-age=3600',
+      });
+      return res.end(chunk);
+    }
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', fileSize);
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(buffer);
+  } catch (err: any) {
+    console.error('[Omni Video Content] Error:', err);
+    return res.status(500).send(err?.message || 'Failed to stream generated video');
   }
 });
 
@@ -2430,7 +3069,7 @@ Return ONLY valid JSON matching this exact structure:
 }
 Do NOT wrap in markdown backticks. Return raw JSON only. Ensure the code is complete, functional, modern, responsive, and ready to preview.`;
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let textResponse = '';
 
     for (const model of modelsToTry) {
@@ -2571,7 +3210,7 @@ app.post('/api/ai/coder/chat', async (req, res) => {
     const contextStr = currentFile ? `[Current File: ${currentFile.name} (${currentFile.language})]:\n\`\`\`\n${currentFile.content}\n\`\`\`\n\n` : '';
     const fullContent = `${contextStr}User Request: ${prompt.trim()}`;
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let answer = '';
 
     for (const model of modelsToTry) {
@@ -2615,7 +3254,7 @@ Return ONLY valid JSON matching this format:
   "fixedCode": "The complete corrected code here..."
 }`;
 
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let textResponse = '';
 
     for (const model of modelsToTry) {
@@ -2660,7 +3299,7 @@ Return ONLY valid JSON matching this format:
 app.post('/api/ai/coder/explain', async (req, res) => {
   try {
     const { code } = req.body;
-    const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+    const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
     let explanation = '';
 
     for (const model of modelsToTry) {
@@ -2688,16 +3327,32 @@ app.post('/api/ai/coder/explain', async (req, res) => {
 
 app.post('/api/ai/transcribe', async (req, res) => {
   try {
-    const { audioData } = req.body;
-    if (!audioData) return res.status(400).json({ error: 'Audio data required' });
-    
-    const interaction = await ai.interactions.create({
+    const { audioData, mimeType } = req.body;
+    if (!audioData || typeof audioData !== 'string') {
+      return res.status(400).json({ success: false, error: 'Audio data required' });
+    }
+
+    const detectedMime = audioData.match(/^data:([^;]+);base64,/)?.[1] || mimeType || 'audio/webm';
+    const cleanMime = detectedMime.split(';')[0];
+    const cleanBase64 = audioData.replace(/^data:.*?;base64,/, '');
+
+    const response = await ai.models.generateContent({
       model: 'gemini-3.5-transcribe',
-      input: [{ type: 'audio', data: audioData, mime_type: 'audio/webm' }, { type: 'text', text: 'Transcribe this.' }],
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: cleanMime, data: cleanBase64 } },
+            { text: 'Transcribe this audio accurately.' },
+          ],
+        },
+      ],
     });
-    return res.json({ text: interaction.output_text });
+
+    return res.json({ success: true, text: response.text || '' });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Transcription failed' });
+    console.error('Audio transcription error:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Transcription failed' });
   }
 });
 
@@ -2957,12 +3612,22 @@ Provide a structured, accurate JSON response strictly matching this JSON schema:
 }
 Ensure JSON is valid. Do not invent unverified facts outside the provided story context.`;
 
-    const interaction = await ai.interactions.create({
-      model: 'gemini-flash-latest',
-      input: [{ type: 'text', text: prompt }],
-    });
-
-    const text = interaction.output_text || '';
+    let text = '';
+    for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const resAi = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseMimeType: 'application/json' },
+        });
+        if (resAi?.text) {
+          text = resAi.text;
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`[News Summary] Model ${model} failed:`, err?.message || err);
+      }
+    }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const summaryData = JSON.parse(jsonMatch[0]);
@@ -3013,12 +3678,22 @@ Provide a strictly valid JSON response in this format:
 }
 Never label a claim false without clear conflicting evidence. If uncertain, return "insufficient".`;
 
-    const interaction = await ai.interactions.create({
-      model: 'gemini-flash-latest',
-      input: [{ type: 'text', text: prompt }],
-    });
-
-    const text = interaction.output_text || '';
+    let text = '';
+    for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const resAi = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseMimeType: 'application/json' },
+        });
+        if (resAi?.text) {
+          text = resAi.text;
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`[News Verify] Model ${model} failed:`, err?.message || err);
+      }
+    }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const result = JSON.parse(jsonMatch[0]);
@@ -3067,12 +3742,22 @@ Compare how different publishers report this story. Return JSON matching:
   "balancedConclusion": "A objective conclusion based strictly on reported data."
 }`;
 
-    const interaction = await ai.interactions.create({
-      model: 'gemini-flash-latest',
-      input: [{ type: 'text', text: prompt }],
-    });
-
-    const text = interaction.output_text || '';
+    let text = '';
+    for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const resAi = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseMimeType: 'application/json' },
+        });
+        if (resAi?.text) {
+          text = resAi.text;
+          break;
+        }
+      } catch (err: any) {
+        console.warn(`[News Compare] Model ${model} failed:`, err?.message || err);
+      }
+    }
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const comparison = JSON.parse(jsonMatch[0]);
@@ -3155,15 +3840,29 @@ Return ONLY a valid JSON object matching this schema:
 
 No preamble, no markdown. Just the JSON object.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-flash-latest',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const text = response.text;
+    let text = '';
+    let lastMechError: any;
+    for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        });
+        if (response?.text) {
+          text = response.text;
+          break;
+        }
+      } catch (err: any) {
+        lastMechError = err;
+        console.warn(`[3D_LAB] Model ${model} failed:`, err?.message || err);
+      }
+    }
+    if (!text && lastMechError) {
+      throw lastMechError;
+    }
     if (!text) {
       console.error('[3D_LAB] Empty response from Gemini');
       throw new Error('Gemini returned an empty response');
@@ -3238,5 +3937,9 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!IS_VERCEL && process.env.NODE_ENV !== 'test') {
+  startServer();
+}
+
+export default app;
 

@@ -38,15 +38,24 @@ export async function generateAIPersonalPlan(ai: GoogleGenAI, data: {
     Upcoming Milestones (Countdowns): ${JSON.stringify(upcomingCountdowns || [])}
   `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
-    contents: context,
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      temperature: 0.7,
-    },
-  });
+  const modelsToTry = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: context,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+        },
+      });
+      if (response?.text) {
+        return response.text;
+      }
+    } catch (err: any) {
+      console.warn(`[AIClockPlanner] Model ${model} failed:`, err?.message || err);
+    }
+  }
 
-  return response.text;
+  throw new Error('AI Clock Planner service temporarily unavailable.');
 }
 

@@ -15,8 +15,7 @@ function getAIClient(): GoogleGenAI {
 }
 
 const modelsToTry = [
-  'gemini-3.8-flash',
-  'gemini-flash-latest',
+  'gemini-4-hydrogen',
   'gemini-3.1-flash-lite',
 ];
 
@@ -260,7 +259,6 @@ Rules:
           contents: prompt,
           config: {
             systemInstruction,
-            temperature: 0.4,
           },
         });
 
@@ -303,7 +301,6 @@ Only state observations supported directly by the calculated summary statistics.
           contents: prompt,
           config: {
             systemInstruction,
-            temperature: 0.5,
           },
         });
 

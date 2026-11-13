@@ -5,7 +5,7 @@ import { exportToDocx, exportToPdf, triggerFileDownload } from '../utils/fileExp
 import { MemoryItem } from '../../server/memoryVaultService';
 import { UserProfile } from '../../server/authService';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebaseConfig';
+import { db, auth } from '../firebaseConfig';
 import { 
   Brain, 
   Plus, 
@@ -243,7 +243,7 @@ export const AIMemoryVaultModal: React.FC<AIMemoryVaultModalProps> = ({
       }
     }).catch((e) => console.warn('Photos auto-merge error:', e));
 
-    if (userId === 'guest_default') {
+    if (!auth.currentUser || auth.currentUser.uid !== userId) {
       return () => {
         window.removeEventListener('vault_updated', handleVaultEvent);
       };
@@ -278,7 +278,7 @@ export const AIMemoryVaultModal: React.FC<AIMemoryVaultModalProps> = ({
 
   // Helper to sync state to Firestore (called on user actions)
   const syncToFirestore = async (updatedMemories: MemoryItem[]) => {
-    if (userId === 'guest_default') return;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) return;
     
     try {
       await setDoc(doc(db, 'user_vault_records', userId), {
@@ -288,7 +288,6 @@ export const AIMemoryVaultModal: React.FC<AIMemoryVaultModalProps> = ({
       }, { merge: true });
     } catch (err) {
       console.warn('[Firestore Vault Update] Error:', err);
-      handleFirestoreError(err, OperationType.WRITE, `user_vault_records/${userId}`);
     }
   };
 

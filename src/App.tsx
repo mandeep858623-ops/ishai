@@ -233,7 +233,7 @@ export default function App() {
     } catch {}
   }, [requestFullscreenMode]);
 
-  // Track fullscreen changes and enable auto-fullscreen on first user interaction on load
+  // Track fullscreen changes (fullscreen is strictly user-initiated via explicit toggle buttons)
   useEffect(() => {
     const handleFsChange = () => {
       setIsFullscreen(!!(document.fullscreenElement || (document as any).webkitFullscreenElement));
@@ -241,29 +241,11 @@ export default function App() {
     document.addEventListener('fullscreenchange', handleFsChange);
     document.addEventListener('webkitfullscreenchange', handleFsChange);
 
-    // Attempt immediately on mount
-    requestFullscreenMode();
-
-    // Attach auto-fullscreen trigger on first user gesture anywhere on screen
-    const autoFsGesture = () => {
-      requestFullscreenMode();
-      window.removeEventListener('click', autoFsGesture);
-      window.removeEventListener('touchstart', autoFsGesture);
-      window.removeEventListener('keydown', autoFsGesture);
-    };
-
-    window.addEventListener('click', autoFsGesture, { once: true });
-    window.addEventListener('touchstart', autoFsGesture, { once: true });
-    window.addEventListener('keydown', autoFsGesture, { once: true });
-
     return () => {
       document.removeEventListener('fullscreenchange', handleFsChange);
       document.removeEventListener('webkitfullscreenchange', handleFsChange);
-      window.removeEventListener('click', autoFsGesture);
-      window.removeEventListener('touchstart', autoFsGesture);
-      window.removeEventListener('keydown', autoFsGesture);
     };
-  }, [requestFullscreenMode]);
+  }, []);
 
   const handleReplayIntro = useCallback(() => {
     soundEngine.playClick();

@@ -527,7 +527,7 @@ Output a single valid JSON object strictly adhering to this format:
 }`;
 
   let parsedReportJson: any = null;
-  const models = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  const models = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
 
   for (const model of models) {
     try {
@@ -537,7 +537,6 @@ Output a single valid JSON object strictly adhering to this format:
         config: {
           systemInstruction: systemPrompt,
           responseMimeType: 'application/json',
-          temperature: 0.2,
         },
       });
 
@@ -710,15 +709,20 @@ RULES:
 - If the question asks for something not covered in the original sources, explicitly state what is known versus what requires further investigation.
 - Keep the tone analytical, scientific, and professional.`;
 
-  try {
-    const res = await aiClient.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-    });
-    return res.text?.trim() || 'No additional follow-up response could be computed.';
-  } catch (err: any) {
-    return `Analysis error: ${err?.message || 'Unable to compute follow-up response.'}`;
+  for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+    try {
+      const res = await aiClient.models.generateContent({
+        model,
+        contents: prompt,
+      });
+      if (res.text?.trim()) {
+        return res.text.trim();
+      }
+    } catch (err: any) {
+      console.warn(`DeepResearch followup (${model}) failed:`, err?.message || err);
+    }
   }
+  return 'Unable to compute follow-up response right now.';
 }
 
 // ----------------------------------------------------------------------------
@@ -744,13 +748,18 @@ export async function transformResearchReport({
     prompt = `Translate the following research report text accurately into ${targetLanguage || 'English'}, maintaining all markdown formatting, professional terminology, and citation tags [1]:\n\n${content}`;
   }
 
-  try {
-    const res = await aiClient.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-    });
-    return res.text?.trim() || content;
-  } catch {
-    return content;
+  for (const model of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
+    try {
+      const res = await aiClient.models.generateContent({
+        model,
+        contents: prompt,
+      });
+      if (res.text?.trim()) {
+        return res.text.trim();
+      }
+    } catch {
+      // Try next fallback model
+    }
   }
+  return content;
 }

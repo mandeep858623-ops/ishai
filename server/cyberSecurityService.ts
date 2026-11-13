@@ -20,13 +20,13 @@ const ai = new GoogleGenAI({
 async function generateCyberContent(prompt: string) {
   try {
     return await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: 'gemini-4-hydrogen',
       contents: prompt,
     });
   } catch (err: any) {
-    console.warn('Primary model error, trying gemini-3.8-flash:', err?.message);
+    console.warn('Primary model error, trying gemini-3.1-flash-lite:', err?.message);
     return await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3.1-flash-lite',
       contents: prompt,
     });
   }
