@@ -31,6 +31,8 @@ export type YouTubeBrowseSection =
 
 export interface YouTubeApiStatus {
   configured: boolean;
+  apiKeyConfigured?: boolean;
+  mode?: string;
   requiredEnvVar: string;
   regionCode: string;
   setupInstructions: string;
@@ -94,8 +96,9 @@ export function extractYouTubeVideoId(input: string): string | null {
 
 export function formatRelativeDate(iso?: string): string {
   if (!iso) return '';
+  if (/ago|streamed|premiered/i.test(iso)) return iso;
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
+  if (Number.isNaN(date.getTime())) return iso;
   const diffDays = Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24));
   if (diffDays <= 0) return 'Today';
   if (diffDays === 1) return '1 day ago';

@@ -139,11 +139,13 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
   const [theaterMode, setTheaterMode] = useState<boolean>(false);
   const [showFullDesc, setShowFullDesc] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<boolean>(false);
+  const [autoplayOnLoad, setAutoplayOnLoad] = useState<boolean>(false);
+  const [dismissKeyNotice, setDismissKeyNotice] = useState<boolean>(false);
 
-  const playerMountRef = useRef<HTMLDivElement | null>(null);
   const ytPlayerRef = useRef<any>(null);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
   const stateLoadedRef = useRef<boolean>(false);
+  const initialVideoSelectedRef = useRef<boolean>(false);
 
   // Keep user state isolated on Firebase Auth sign-in/sign-out changes
   useEffect(() => {
@@ -212,8 +214,14 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       }
       try {
         const data = await browseYouTube(section, { maxResults: 16, pageToken });
-        setVideos((prev) => (pageToken ? [...prev, ...data.videos] : data.videos));
+        const loadedVideos = data.videos || [];
+        setVideos((prev) => (pageToken ? [...prev, ...loadedVideos] : loadedVideos));
         setNextPageToken(data.nextPageToken);
+        if (!pageToken && !initialVideoSelectedRef.current && loadedVideos.length > 0) {
+          initialVideoSelectedRef.current = true;
+          setAutoplayOnLoad(false);
+          setCurrentVideo((prev) => prev || loadedVideos[0]);
+        }
       } catch (err: any) {
         const isMissingKey = err instanceof YouTubeClientError && !err.configured;
         setListError({
@@ -229,28 +237,20 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     []
   );
 
-  // Check API configuration status on mount and load Trending if configured
+  // Check API configuration status and immediately load playable Trending videos
   useEffect(() => {
     let active = true;
     setStatusLoading(true);
+    loadBrowseSection('trending');
     fetchYouTubeStatus()
       .then((status) => {
         if (!active) return;
         setApiStatus(status);
         setStatusLoading(false);
-        if (status.configured) {
-          loadBrowseSection('trending');
-        }
       })
-      .catch((err) => {
+      .catch(() => {
         if (!active) return;
         setStatusLoading(false);
-        setApiStatus({
-          configured: false,
-          requiredEnvVar: 'YOUTUBE_API_KEY',
-          regionCode: 'US',
-          setupInstructions: err?.message || 'Unable to verify server YouTube Data API status.',
-        });
       });
     return () => {
       active = false;
@@ -271,9 +271,9 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     return () => window.clearTimeout(timer);
   }, [searchInput]);
 
-  // Load related videos when currentVideo changes (only if API key configured)
+  // Load related videos when currentVideo changes
   useEffect(() => {
-    if (!currentVideo || !apiStatus?.configured) {
+    if (!currentVideo) {
       setRelatedVideos([]);
       return;
     }
@@ -292,9 +292,9 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [currentVideo?.id, apiStatus?.configured]);
+  }, [currentVideo?.id]);
 
-  // Initialize / update official YouTube IFrame Player API when currentVideo changes
+  // Attach official YouTube IFrame Player API to the rendered official embed iframe
   useEffect(() => {
     if (!currentVideo) {
       if (ytPlayerRef.current) {
@@ -315,20 +315,17 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     setPlayerError(null);
     setPlayerReady(false);
 
+    // Ensure loading overlay never gets stuck if iframe_api takes time or is blocked
+    const readyFallbackTimer = window.setTimeout(() => {
+      if (!cancelled) setPlayerReady(true);
+    }, 2200);
+
+    const iframeId = `ishai-yt-iframe-${currentVideo.id}`;
     loadYouTubeIframeAPI()
       .then((YT) => {
-        if (cancelled || !playerMountRef.current) return;
-
-        // If an instance already exists, swap video cleanly inside the same iframe
-        if (ytPlayerRef.current && typeof ytPlayerRef.current.loadVideoById === 'function') {
-          try {
-            ytPlayerRef.current.loadVideoById(currentVideo.id);
-            setPlayerReady(true);
-            return;
-          } catch {
-            // Fall through to fresh recreate
-          }
-        }
+        if (cancelled) return;
+        const iframeEl = document.getElementById(iframeId);
+        if (!iframeEl) return;
 
         if (ytPlayerRef.current) {
           try {
@@ -337,46 +334,31 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
           ytPlayerRef.current = null;
         }
 
-        const hostEl = document.createElement('div');
-        hostEl.className = 'w-full h-full';
-        playerMountRef.current.innerHTML = '';
-        playerMountRef.current.appendChild(hostEl);
-
-        ytPlayerRef.current = new YT.Player(hostEl, {
-          width: '100%',
-          height: '100%',
-          videoId: currentVideo.id,
-          host: 'https://www.youtube.com',
-          playerVars: {
-            autoplay: 1,
-            controls: 1,
-            fs: 1,
-            rel: 0,
-            modestbranding: 1,
-            playsinline: 1,
-            enablejsapi: 1,
-            origin: window.location.origin,
-          },
+        ytPlayerRef.current = new YT.Player(iframeId, {
           events: {
             onReady: () => {
-              if (!cancelled) setPlayerReady(true);
+              if (!cancelled) {
+                window.clearTimeout(readyFallbackTimer);
+                setPlayerReady(true);
+              }
             },
             onError: (event: any) => {
               if (!cancelled) {
+                window.clearTimeout(readyFallbackTimer);
                 setPlayerError(getYouTubeErrorDescription(Number(event?.data)));
               }
             },
           },
         });
       })
-      .catch((err: any) => {
-        if (!cancelled) {
-          setPlayerError(err?.message || 'Unable to load official YouTube embedded player.');
-        }
+      .catch(() => {
+        // Native official YouTube embed iframe remains fully playable
+        if (!cancelled) setPlayerReady(true);
       });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(readyFallbackTimer);
     };
   }, [currentVideo?.id, currentVideo?.embeddable]);
 
@@ -412,6 +394,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       soundEngine.playClick();
       setPlayerError(null);
       setShowFullDesc(false);
+      setAutoplayOnLoad(true);
       setCurrentVideo(video);
       recordWatchedVideo(video);
       onLog(`▶️ Playing YouTube video inside ISHAI: "${video.title}" (${video.channelTitle})`, 'MEDIA');
@@ -807,53 +790,25 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
 
         {/* Scrollable Workspace Content */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-6">
-          {/* Honest Missing YouTube Data API Key Banner */}
-          {!statusLoading && apiStatus && !apiStatus.configured && (
-            <section className={`rounded-2xl border p-4 sm:p-5 ${bgSurface}`}>
-              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
-                    <KeyRound className="w-5 h-5" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <h3 className="text-sm sm:text-base font-bold">
-                      YouTube Data API v3 Key Required for Search &amp; Browse
-                    </h3>
-                    <p className={`text-xs sm:text-sm leading-relaxed max-w-3xl ${textMuted}`}>
-                      Live YouTube search, Trending, and category discovery require a server-side{' '}
-                      <code className="px-1.5 py-0.5 rounded bg-zinc-500/15 font-mono text-xs">
-                        YOUTUBE_API_KEY
-                      </code>{' '}
-                      with <strong>YouTube Data API v3</strong> enabled in Google Cloud Console. Add it to your{' '}
-                      <code className="px-1.5 py-0.5 rounded bg-zinc-500/15 font-mono text-xs">.env</code> file
-                      or Vercel Environment Variables (never expose API keys in frontend code).
-                    </p>
-                    <p className={`text-xs ${textMuted}`}>
-                      You can still play any real YouTube video right now inside ISHAI by pasting a YouTube URL
-                      or 11-character video ID into the search bar above, or watch from your Saved Favourites &amp;
-                      History below.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setStatusLoading(true);
-                    fetchYouTubeStatus()
-                      .then((st) => {
-                        setApiStatus(st);
-                        setStatusLoading(false);
-                        if (st.configured) loadBrowseSection('trending');
-                      })
-                      .catch(() => setStatusLoading(false));
-                  }}
-                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer ${bgSubtle}`}
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Recheck Config</span>
-                </button>
+          {/* Subtle Non-Blocking Info Notice when optional YOUTUBE_API_KEY is not set */}
+          {!statusLoading && !dismissKeyNotice && apiStatus && apiStatus.apiKeyConfigured === false && (
+            <div className={`rounded-xl border px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs ${bgSurface}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <KeyRound className="w-4 h-4 text-amber-500 shrink-0" />
+                <span className={`truncate ${textMuted}`}>
+                  Standard YouTube playback &amp; search active. Add{' '}
+                  <code className="font-mono">YOUTUBE_API_KEY</code> on the server for official YouTube Data API v3 quota mode.
+                </span>
               </div>
-            </section>
+              <button
+                type="button"
+                onClick={() => setDismissKeyNotice(true)}
+                className={`p-1 rounded hover:bg-zinc-500/20 shrink-0 cursor-pointer ${textMuted}`}
+                aria-label="Dismiss notice"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           )}
 
           {/* Active Video Player + Related Videos Section */}
@@ -862,7 +817,21 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
               {/* Main Video Stage */}
               <div className={`rounded-2xl border overflow-hidden ${bgSurface}`}>
                 <div className="relative w-full aspect-video bg-black">
-                  <div ref={playerMountRef} className="w-full h-full" />
+                  <iframe
+                    key={`${currentVideo.id}-${autoplayOnLoad ? 'play' : 'ready'}`}
+                    id={`ishai-yt-iframe-${currentVideo.id}`}
+                    src={`https://www.youtube.com/embed/${encodeURIComponent(
+                      currentVideo.id
+                    )}?enablejsapi=1&autoplay=${autoplayOnLoad ? 1 : 0}&controls=1&fs=1&rel=0&modestbranding=1&playsinline=1&origin=${encodeURIComponent(
+                      typeof window !== 'undefined' ? window.location.origin : ''
+                    )}`}
+                    title={currentVideo.title}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                    allowFullScreen
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    onLoad={() => setPlayerReady(true)}
+                    className="w-full h-full border-0"
+                  />
 
                   {!playerReady && !playerError && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/75 text-white gap-2 pointer-events-none">
@@ -1003,12 +972,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
                   </button>
                 </div>
 
-                {!apiStatus?.configured ? (
-                  <p className={`text-xs ${textMuted}`}>
-                    Configure <code className="font-mono">YOUTUBE_API_KEY</code> on the server to load live
-                    related YouTube recommendations.
-                  </p>
-                ) : relatedLoading ? (
+                {relatedLoading ? (
                   <div className="space-y-3">
                     {[0, 1, 2, 3].map((i) => (
                       <div key={i} className="flex gap-2.5 animate-pulse">
@@ -1134,7 +1098,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
             </div>
 
             {/* Suggested Search Starters */}
-            {apiStatus?.configured && activeSection !== 'history' && activeSection !== 'favorites' && (
+            {activeSection !== 'history' && activeSection !== 'favorites' && (
               <div className="flex items-center gap-2 overflow-x-auto pb-1">
                 <span className={`text-[11px] whitespace-nowrap ${textMuted}`}>Try searching:</span>
                 {QUICK_TOPICS.map((topic) => (
