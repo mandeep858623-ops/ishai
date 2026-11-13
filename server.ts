@@ -71,6 +71,16 @@ import {
   generateWeatherIntelligence,
 } from './server/weatherService';
 import { processHoloChat, streamHoloChat, getHoloStatus } from './server/holoAiService';
+import {
+  getYouTubeStatus,
+  searchYouTubeVideos,
+  browseYouTubeCategory,
+  getYouTubeVideoDetails,
+  getRelatedYouTubeVideos,
+  getYouTubeSearchSuggestions,
+  YouTubeServiceError,
+  YouTubeBrowseSection,
+} from './server/youtubeService';
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY || '',
@@ -1987,111 +1997,95 @@ app.post('/api/ai/universal-song-search', async (req, res) => {
   }
 });
 
-// Universal Video Search (Finds ANY video in the world to watch and download)
+// Official YouTube Data API v3 Routes (Server-side API Key & Quota Caching)
+const handleYouTubeRouteError = (res: any, err: any) => {
+  if (err instanceof YouTubeServiceError) {
+    return res.status(err.status).json({
+      success: false,
+      error: err.message,
+      code: err.code,
+      configured: err.configured,
+      requiredEnvVar: err.requiredEnvVar || 'YOUTUBE_API_KEY',
+    });
+  }
+  console.error('[YouTube API Error]:', err);
+  return res.status(500).json({
+    success: false,
+    error: err?.message || 'YouTube service failed.',
+    code: 'YOUTUBE_INTERNAL_ERROR',
+    configured: Boolean(process.env.YOUTUBE_API_KEY || process.env.GOOGLE_YOUTUBE_API_KEY),
+  });
+};
+
+app.get('/api/youtube/status', (_req, res) => {
+  return res.json({ success: true, ...getYouTubeStatus() });
+});
+
+app.get('/api/youtube/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const maxResults = Number(req.query.maxResults || 16);
+    const pageToken = req.query.pageToken ? String(req.query.pageToken) : undefined;
+    const categoryId = req.query.categoryId ? String(req.query.categoryId) : undefined;
+    const order = (req.query.order as 'relevance' | 'date' | 'viewCount' | 'rating') || 'relevance';
+
+    const result = await searchYouTubeVideos({ query: q, maxResults, pageToken, categoryId, order });
+    return res.json({ success: true, configured: true, ...result });
+  } catch (err: any) {
+    return handleYouTubeRouteError(res, err);
+  }
+});
+
+app.get('/api/youtube/browse', async (req, res) => {
+  try {
+    const section = String(req.query.category || req.query.section || 'trending') as YouTubeBrowseSection;
+    const regionCode = req.query.regionCode ? String(req.query.regionCode) : undefined;
+    const maxResults = Number(req.query.maxResults || 16);
+    const pageToken = req.query.pageToken ? String(req.query.pageToken) : undefined;
+
+    const result = await browseYouTubeCategory({ section, regionCode, maxResults, pageToken });
+    return res.json({ success: true, configured: true, ...result });
+  } catch (err: any) {
+    return handleYouTubeRouteError(res, err);
+  }
+});
+
+app.get('/api/youtube/video/:videoId', async (req, res) => {
+  try {
+    const video = await getYouTubeVideoDetails(req.params.videoId);
+    return res.json({ success: true, configured: true, video });
+  } catch (err: any) {
+    return handleYouTubeRouteError(res, err);
+  }
+});
+
+app.get('/api/youtube/related/:videoId', async (req, res) => {
+  try {
+    const result = await getRelatedYouTubeVideos(req.params.videoId);
+    return res.json({ success: true, configured: true, ...result });
+  } catch (err: any) {
+    return handleYouTubeRouteError(res, err);
+  }
+});
+
+app.get('/api/youtube/suggestions', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const suggestions = await getYouTubeSearchSuggestions(q);
+    return res.json({ success: true, query: q, suggestions });
+  } catch {
+    return res.json({ success: true, query: '', suggestions: [] });
+  }
+});
+
+// Legacy endpoint wrapper routed cleanly to official YouTube Data API v3 (no HTML scraping or download links)
 app.post('/api/ai/universal-video-search', async (req, res) => {
   try {
     const { query } = req.body;
-    if (!query || typeof query !== 'string') {
-      return res.status(400).json({ error: 'Query required' });
-    }
-
-    const clean = query.trim();
-    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(clean)}`;
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 7000);
-
-    const upstream = await fetch(searchUrl, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
-    clearTimeout(timeout);
-
-    if (!upstream.ok) {
-      throw new Error(`Upstream ${upstream.status}`);
-    }
-
-    const html = await upstream.text();
-    const jsonMatch = html.match(/var ytInitialData = ({.*?});<\/script>/);
-
-    const videos = [];
-    if (jsonMatch) {
-      try {
-        const data = JSON.parse(jsonMatch[1]);
-        const contents =
-          data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]
-            ?.itemSectionRenderer?.contents || [];
-
-        for (const item of contents) {
-          const v = item.videoRenderer;
-          if (v && v.videoId) {
-            const title = v.title?.runs?.[0]?.text || clean;
-            const channel = v.ownerText?.runs?.[0]?.text || 'Official Creator';
-            const thumbnail =
-              v.thumbnail?.thumbnails?.slice(-1)[0]?.url ||
-              `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`;
-            const duration = v.lengthText?.simpleText || '3:30';
-            const views =
-              v.viewCountText?.simpleText ||
-              v.shortViewCountText?.simpleText ||
-              'High View Count';
-
-            videos.push({
-              id: v.videoId,
-              title,
-              channel,
-              thumbnail,
-              duration,
-              views,
-              youtubeId: v.videoId,
-              embedUrl: `https://www.youtube-nocookie.com/embed/${v.videoId}?autoplay=1&enablejsapi=1&rel=0`,
-              downloadUrl: `https://ssyoutube.com/watch?v=${v.videoId}`,
-              downloadMp4Url: `https://www.y2mate.com/youtube/${v.videoId}`,
-              posterUrl: `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
-            });
-
-            if (videos.length >= 10) break;
-          }
-        }
-      } catch (e) {
-        console.warn('JSON parse error in video search:', e);
-      }
-    }
-
-    // Fallback regex matching if JSON structure was wrapped
-    if (videos.length === 0) {
-      const matches = [...html.matchAll(/\/watch\?v=([a-zA-Z0-9_-]{11})/g)];
-      const seen = new Set();
-      for (const m of matches) {
-        const id = m[1];
-        if (!seen.has(id)) {
-          seen.add(id);
-          videos.push({
-            id,
-            title: clean.toUpperCase(),
-            channel: 'High Definition Video',
-            thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-            duration: '4:00',
-            views: 'Popular',
-            youtubeId: id,
-            embedUrl: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&enablejsapi=1&rel=0`,
-            downloadUrl: `https://ssyoutube.com/watch?v=${id}`,
-            downloadMp4Url: `https://www.y2mate.com/youtube/${id}`,
-            posterUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-          });
-          if (videos.length >= 8) break;
-        }
-      }
-    }
-
-    return res.json({ videos, query: clean });
+    const result = await searchYouTubeVideos({ query: String(query || ''), maxResults: 12 });
+    return res.json({ success: true, configured: true, ...result });
   } catch (err: any) {
-    console.error('Universal video search error:', err);
-    return res.status(500).json({ error: 'Video search failed' });
+    return handleYouTubeRouteError(res, err);
   }
 });
 

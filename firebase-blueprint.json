@@ -79,6 +79,20 @@
         "updated_at": { "type": "string", "format": "date-time", "description": "Last updated timestamp" }
       },
       "required": ["user_id", "updated_at"]
+    },
+    "YouTubeRecord": {
+      "title": "YouTube Player User Record",
+      "description": "Per-user saved YouTube favourites, watch history, recent searches, and player theme",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "description": "Owner UID" },
+        "favorites": { "type": "array", "description": "Saved YouTube videos list" },
+        "history": { "type": "array", "description": "Recently watched YouTube videos list" },
+        "recent_searches": { "type": "array", "description": "Recent search query strings" },
+        "theme": { "type": "string", "enum": ["dark", "light"], "description": "YouTube player theme preference" },
+        "updated_at": { "type": "string", "format": "date-time", "description": "Last updated timestamp" }
+      },
+      "required": ["user_id", "favorites", "history", "recent_searches", "updated_at"]
     }
   },
   "firestore": {
@@ -109,6 +123,10 @@
     },
     "/cityverse_projects/{projectId}": {
       "description": "User-owned 3D Cityverse saved city projects"
+    },
+    "/user_youtube_records/{userId}": {
+      "schema": "YouTubeRecord",
+      "description": "Per-user saved YouTube favourites, watch history, and recent searches"
     }
   }
 }

@@ -390,5 +390,22 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isOwner(resource.data.userId);
     }
 
+    function isValidYouTubeRecord(data) {
+      return data.keys().hasAll(['user_id', 'favorites', 'history', 'recent_searches', 'updated_at']) &&
+             data.keys().hasOnly(['user_id', 'favorites', 'history', 'recent_searches', 'theme', 'updated_at']) &&
+             data.user_id == request.auth.uid &&
+             data.favorites is list && data.favorites.size() <= 100 &&
+             data.history is list && data.history.size() <= 100 &&
+             data.recent_searches is list && data.recent_searches.size() <= 30 &&
+             (data.get('theme', null) == null || data.theme in ['dark', 'light']) &&
+             data.updated_at is string && data.updated_at.size() <= 64;
+    }
+
+    match /user_youtube_records/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidYouTubeRecord(incoming());
+      allow delete: if isOwner(userId);
+    }
+
   }
 }

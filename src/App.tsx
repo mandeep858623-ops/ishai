@@ -716,9 +716,9 @@ export default function App() {
   const f_video_creator = () => {
     soundEngine.playClick();
     if (!audioMuted) {
-      speakText('What video do you want to create?', voiceGender);
+      speakText('YouTube Player online. What would you like to watch?', voiceGender);
     }
-    writeLog('🎬 AI Video Creator opened. AI Prompt: "What video do you want to create?"', 'INTELLIGENCE');
+    writeLog('▶️ YouTube Player opened inside ISHAI.', 'MEDIA');
     setActiveModal('VIDEO_CREATOR');
   };
 
@@ -1615,9 +1615,9 @@ export default function App() {
     } else if (lower.startsWith('draw ') || lower.startsWith('art ') || lower.startsWith('make image ') || lower.startsWith('create image ')) {
       f_image_creator();
 
-    } else if (lower === 'video' || lower === 'videos' || lower === 'video creator' || lower === 'movie' || lower === 'clip' || lower === 'film') {
+    } else if (lower === 'youtube' || lower === 'youtube player' || lower === 'watch video' || lower === 'video' || lower === 'videos' || lower === 'video creator' || lower === 'movie' || lower === 'clip' || lower === 'film') {
       f_video_creator();
-    } else if (lower.startsWith('video ') || lower.startsWith('make video ') || lower.startsWith('create video ') || lower.startsWith('generate video ')) {
+    } else if (lower.startsWith('youtube ') || lower.startsWith('watch ') || lower.startsWith('video ') || lower.startsWith('make video ') || lower.startsWith('create video ') || lower.startsWith('generate video ')) {
       f_video_creator();
 
     } else if (lower === 'music' || lower === 'song' || lower === 'songs' || lower === 'player' || lower === 'play' || lower === 'audio') {
@@ -1810,7 +1810,7 @@ export default function App() {
     { name: '📅 SMART PLANNER', cmd: f_planner, icon: Calendar },
     { name: '⚡ AI CODER', cmd: f_ai_coder, icon: Code },
     { name: '🎨 IMAGE CREATOR', cmd: f_image_creator, icon: Sparkles },
-    { name: '🎬 VIDEO CREATOR', cmd: f_video_creator, icon: Video },
+    { name: '▶️ YOUTUBE PLAYER', cmd: f_video_creator, icon: Video },
     { name: '🎥 AI VIDEO EDITOR', cmd: f_ai_video_editor, icon: Film },
     { name: '🎵 MUSIC PLAYER', cmd: f_music_player, icon: Music },
 
@@ -1910,9 +1910,15 @@ export default function App() {
         const featureQuery = parts[0].trim();
         const subActionQuery = parts[1] ? parts[1].trim() : '';
 
+        // 0. Keep YouTube inside ISHAI (never redirect externally)
+        if (featureQuery === 'youtube' || featureQuery === 'youtube player') {
+          f_video_creator();
+          writeLog('[YOUTUBE PLAYER]: Opened in-app YouTube Player inside ISHAI.', 'MEDIA');
+          return;
+        }
+
         // 1. External Web Launcher
         const sites: Record<string, string> = {
-          'youtube': 'https://www.youtube.com',
           'google': 'https://www.google.com',
           'gmail': 'https://mail.google.com',
           'wikipedia': 'https://www.wikipedia.org',
@@ -2943,13 +2949,15 @@ export default function App() {
         />
       )}
 
-      {/* 100% Free AI Video Creator & Studio Modal */}
+      {/* ISHAI YouTube Player Modal */}
       {activeModal === 'VIDEO_CREATOR' && (
         <VideoCreatorModal
           onClose={() => setActiveModal(null)}
           onLog={writeLog}
           voiceGender={voiceGender}
           audioActive={!audioMuted}
+          currentUserId={currentUser?.uid || null}
+          userEmail={currentUser?.email || null}
         />
       )}
 

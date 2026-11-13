@@ -1,694 +1,1356 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { ModalWrapper } from './Modals';
-import { soundEngine, speakText } from '../utils/audio';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Search,
+  Play,
+  Heart,
+  History,
+  Flame,
+  Music,
+  GraduationCap,
+  Cpu,
+  Clapperboard,
+  Gamepad2,
+  Newspaper,
+  Trophy,
+  Sun,
+  Moon,
+  X,
+  Maximize2,
+  Minimize2,
+  Trash2,
+  AlertTriangle,
+  KeyRound,
+  ChevronDown,
+  ChevronUp,
+  Check,
+  Copy,
+  RefreshCw,
+  Clock,
+  Tv,
+} from 'lucide-react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebaseConfig';
+import { soundEngine } from '../utils/audio';
+import {
+  YouTubeVideoItem,
+  YouTubeBrowseSection,
+  YouTubeApiStatus,
+  YouTubeClientError,
+  fetchYouTubeStatus,
+  searchYouTube,
+  browseYouTube,
+  fetchYouTubeVideo,
+  fetchRelatedYouTube,
+  fetchYouTubeSuggestions,
+  loadYouTubeIframeAPI,
+  loadYouTubeUserState,
+  saveYouTubeUserState,
+  extractYouTubeVideoId,
+  formatRelativeDate,
+} from '../services/YouTubeService';
 
-export interface WebVideoItem {
-  id: string;
-  title: string;
-  channel: string;
-  thumbnail: string;
-  duration: string;
-  views: string;
-  videoUrl: string;
-  downloadUrl: string;
-  posterUrl: string;
-  interactionId?: string;
-  aspectRatio?: '16:9' | '9:16';
-  resolution?: '360p' | '720p' | '1080p';
-  isAiGenerated?: boolean;
-}
-
-interface VideoCreatorModalProps {
+interface YouTubePlayerModalProps {
   onClose: () => void;
   onLog: (text: string, tag: string) => void;
   voiceGender: 'Male' | 'Female';
   audioActive: boolean;
+  currentUserId?: string | null;
+  userEmail?: string | null;
 }
 
-const FEATURED_VIDEOS: WebVideoItem[] = [
-  {
-    id: 'local-cyberpunk',
-    title: 'Cyberpunk Metropolis - Neon Night Drone Run (HD)',
-    channel: 'ISHAI Studio Library',
-    thumbnail: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=800&auto=format&fit=crop',
-    duration: '0:15',
-    views: 'Studio Clip',
-    videoUrl: '/videos/cyberpunk.mp4',
-    downloadUrl: '/videos/cyberpunk.mp4',
-    posterUrl: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=800&auto=format&fit=crop',
-  },
-  {
-    id: 'local-supercar',
-    title: 'Supercar Hyper-Drift Velocity 4K',
-    channel: 'ISHAI Studio Library',
-    thumbnail: 'https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?w=800&auto=format&fit=crop',
-    duration: '0:15',
-    views: 'Studio Clip',
-    videoUrl: '/videos/supercar.mp4',
-    downloadUrl: '/videos/supercar.mp4',
-    posterUrl: 'https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?w=800&auto=format&fit=crop',
-  },
-  {
-    id: 'local-space',
-    title: 'Deep Space Orbital Drift & Cosmic Nebula',
-    channel: 'ISHAI Studio Library',
-    thumbnail: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop',
-    duration: '0:15',
-    views: 'Studio Clip',
-    videoUrl: '/videos/space.mp4',
-    downloadUrl: '/videos/space.mp4',
-    posterUrl: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800&auto=format&fit=crop',
-  },
-  {
-    id: 'local-ocean',
-    title: 'Bioluminescent Giant Ocean Wave Swell',
-    channel: 'ISHAI Studio Library',
-    thumbnail: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop',
-    duration: '0:15',
-    views: 'Studio Clip',
-    videoUrl: '/videos/ocean.mp4',
-    downloadUrl: '/videos/ocean.mp4',
-    posterUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop',
-  },
+type ActiveSection = YouTubeBrowseSection | 'search' | 'history' | 'favorites';
+
+const BROWSE_TABS: Array<{ id: YouTubeBrowseSection; label: string; icon: React.FC<{ className?: string }> }> = [
+  { id: 'trending', label: 'Trending', icon: Flame },
+  { id: 'music', label: 'Music', icon: Music },
+  { id: 'education', label: 'Educational', icon: GraduationCap },
+  { id: 'science_tech', label: 'Science & Tech', icon: Cpu },
+  { id: 'entertainment', label: 'Entertainment', icon: Clapperboard },
+  { id: 'gaming', label: 'Gaming', icon: Gamepad2 },
+  { id: 'news', label: 'News', icon: Newspaper },
+  { id: 'sports', label: 'Sports', icon: Trophy },
 ];
 
-const PRESETS = [
-  'Neon cyberpunk drone soaring over rain-slicked Tokyo streets',
-  'Hypercar drifting around an alpine pass at golden hour sunset',
-  'Astronaut floating outside an orbital station with Earth below',
-  'Crystal ocean wave curling in slow motion under northern lights',
-  'Autonomous humanoid robot assembling futuristic circuit boards',
-  'Rocket lifting off through glowing dusk clouds with shockwaves',
+const QUICK_TOPICS = [
+  'James Webb Space Telescope documentary',
+  'Lofi hip hop beats to study',
+  'MIT artificial intelligence lecture',
+  'Acoustic guitar live session',
+  'Formula 1 engineering explained',
 ];
 
-const WATCHLIST_KEY = 'SuperAI_Watchlist';
+function getYouTubeErrorDescription(code: number): string {
+  switch (code) {
+    case 2:
+      return 'Invalid YouTube video ID. Please choose another video.';
+    case 5:
+      return 'The embedded HTML5 YouTube player encountered a playback error on this browser.';
+    case 100:
+      return 'This video was removed, deleted, or marked private by the uploader on YouTube.';
+    case 101:
+    case 150:
+      return 'The video owner has disabled embedded playback outside YouTube. Please select another video to watch inside ISHAI.';
+    default:
+      return 'Playback failed or the video is restricted (age-restricted or unavailable in your region).';
+  }
+}
 
-export const VideoCreatorModal: React.FC<VideoCreatorModalProps> = ({
+export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
   onClose,
   onLog,
-  voiceGender,
-  audioActive,
+  currentUserId = null,
+  userEmail = null,
 }) => {
-  const [prompt, setPrompt] = useState('');
-  const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
-  const [duration, setDuration] = useState<'5s' | '8s' | '10s' | '15s'>('5s');
-  const [resolution, setResolution] = useState<'360p' | '720p' | '1080p'>('720p');
-  const [referenceImage, setReferenceImage] = useState<string | null>(null);
-  const [referenceName, setReferenceName] = useState('');
-  const [extendSelected, setExtendSelected] = useState(false);
+  // User identity scope (Firebase Auth primary, local UID fallback)
+  const [activeUid, setActiveUid] = useState<string | null>(() => auth.currentUser?.uid || currentUserId || null);
+  const [cloudSynced, setCloudSynced] = useState<boolean>(false);
 
-  const [videos, setVideos] = useState<WebVideoItem[]>(FEATURED_VIDEOS);
-  const [currentVideo, setCurrentVideo] = useState<WebVideoItem>(FEATURED_VIDEOS[0]);
-  const [generating, setGenerating] = useState(false);
-  const [statusLabel, setStatusLabel] = useState('');
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Per-user persisted lists & preferences
+  const [favorites, setFavorites] = useState<YouTubeVideoItem[]>([]);
+  const [history, setHistory] = useState<YouTubeVideoItem[]>([]);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
-  const [activeTab, setActiveTab] = useState<'studio' | 'watchlist'>('studio');
-  const [fullScreen, setFullScreen] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
+  // API configuration status
+  const [apiStatus, setApiStatus] = useState<YouTubeApiStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState<boolean>(true);
 
-  const pollTimerRef = useRef<number | null>(null);
-  const elapsedTimerRef = useRef<number | null>(null);
+  // Navigation & discovery
+  const [activeSection, setActiveSection] = useState<ActiveSection>('trending');
+  const [searchInput, setSearchInput] = useState<string>('');
+  const [activeSearchQuery, setActiveSearchQuery] = useState<string>('');
+  const [searchOrder, setSearchOrder] = useState<'relevance' | 'viewCount' | 'date'>('relevance');
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
 
-  const [watchlist, setWatchlist] = useState<WebVideoItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(WATCHLIST_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Sanitize any legacy YouTube items out cleanly
-          const valid = parsed.filter((v: any) => v && typeof v.videoUrl === 'string' && !v.embedUrl);
-          if (valid.length > 0) return valid;
-        }
-      }
-    } catch {}
-    return [FEATURED_VIDEOS[0], FEATURED_VIDEOS[1]];
-  });
+  // Video lists & loading/error states
+  const [videos, setVideos] = useState<YouTubeVideoItem[]>([]);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [listLoading, setListLoading] = useState<boolean>(false);
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
+  const [listError, setListError] = useState<{ message: string; missingKey?: boolean } | null>(null);
+
+  // Active playback state
+  const [currentVideo, setCurrentVideo] = useState<YouTubeVideoItem | null>(null);
+  const [relatedVideos, setRelatedVideos] = useState<YouTubeVideoItem[]>([]);
+  const [relatedLoading, setRelatedLoading] = useState<boolean>(false);
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  const [playerReady, setPlayerReady] = useState<boolean>(false);
+  const [theaterMode, setTheaterMode] = useState<boolean>(false);
+  const [showFullDesc, setShowFullDesc] = useState<boolean>(false);
+  const [copiedId, setCopiedId] = useState<boolean>(false);
+
+  const playerMountRef = useRef<HTMLDivElement | null>(null);
+  const ytPlayerRef = useRef<any>(null);
+  const searchBoxRef = useRef<HTMLDivElement | null>(null);
+  const stateLoadedRef = useRef<boolean>(false);
+
+  // Keep user state isolated on Firebase Auth sign-in/sign-out changes
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (fbUser) => {
+      setActiveUid(fbUser?.uid || currentUserId || null);
+    });
+    return () => unsub();
+  }, [currentUserId]);
 
   useEffect(() => {
+    let cancelled = false;
+    stateLoadedRef.current = false;
+    loadYouTubeUserState(activeUid).then(({ state, syncedToCloud }) => {
+      if (cancelled) return;
+      setFavorites(state.favorites);
+      setHistory(state.history);
+      setRecentSearches(state.recent_searches);
+      setTheme(state.theme);
+      setCloudSynced(syncedToCloud);
+      stateLoadedRef.current = true;
+    });
     return () => {
-      if (pollTimerRef.current) window.clearTimeout(pollTimerRef.current);
-      if (elapsedTimerRef.current) window.clearInterval(elapsedTimerRef.current);
+      cancelled = true;
     };
+  }, [activeUid]);
+
+  const persistUserState = useCallback(
+    (next: {
+      favorites?: YouTubeVideoItem[];
+      history?: YouTubeVideoItem[];
+      recent_searches?: string[];
+      theme?: 'dark' | 'light';
+    }) => {
+      const payload = {
+        favorites: next.favorites ?? favorites,
+        history: next.history ?? history,
+        recent_searches: next.recent_searches ?? recentSearches,
+        theme: next.theme ?? theme,
+      };
+      saveYouTubeUserState(payload, activeUid).then((synced) => {
+        setCloudSynced(synced);
+      });
+    },
+    [favorites, history, recentSearches, theme, activeUid]
+  );
+
+  // Close suggestions dropdown on outside click
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
   }, []);
 
-  const saveWatchlist = (list: WebVideoItem[]) => {
-    setWatchlist(list);
-    try {
-      localStorage.setItem(WATCHLIST_KEY, JSON.stringify(list));
-    } catch {}
-  };
+  // Load browse section helper
+  const loadBrowseSection = useCallback(
+    async (section: YouTubeBrowseSection, pageToken?: string) => {
+      if (pageToken) {
+        setLoadingMore(true);
+      } else {
+        setListLoading(true);
+        setListError(null);
+      }
+      try {
+        const data = await browseYouTube(section, { maxResults: 16, pageToken });
+        setVideos((prev) => (pageToken ? [...prev, ...data.videos] : data.videos));
+        setNextPageToken(data.nextPageToken);
+      } catch (err: any) {
+        const isMissingKey = err instanceof YouTubeClientError && !err.configured;
+        setListError({
+          message: err?.message || 'Unable to load YouTube videos right now.',
+          missingKey: isMissingKey,
+        });
+        if (!pageToken) setVideos([]);
+      } finally {
+        setListLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    []
+  );
 
-  const handleReferenceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setReferenceName(file.name);
-    const reader = new FileReader();
-    reader.onload = () => {
-      setReferenceImage(reader.result as string);
-      soundEngine.playSuccess();
+  // Check API configuration status on mount and load Trending if configured
+  useEffect(() => {
+    let active = true;
+    setStatusLoading(true);
+    fetchYouTubeStatus()
+      .then((status) => {
+        if (!active) return;
+        setApiStatus(status);
+        setStatusLoading(false);
+        if (status.configured) {
+          loadBrowseSection('trending');
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setStatusLoading(false);
+        setApiStatus({
+          configured: false,
+          requiredEnvVar: 'YOUTUBE_API_KEY',
+          regionCode: 'US',
+          setupInstructions: err?.message || 'Unable to verify server YouTube Data API status.',
+        });
+      });
+    return () => {
+      active = false;
     };
-    reader.readAsDataURL(file);
-  };
+  }, [loadBrowseSection]);
 
-  const stopTimers = () => {
-    if (pollTimerRef.current) {
-      window.clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
+  // Debounced live search suggestions
+  useEffect(() => {
+    const q = searchInput.trim();
+    if (!q || extractYouTubeVideoId(q)) {
+      setSuggestions([]);
+      return;
     }
-    if (elapsedTimerRef.current) {
-      window.clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
-  };
+    const timer = window.setTimeout(async () => {
+      const items = await fetchYouTubeSuggestions(q);
+      setSuggestions(items);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
-  const pollGenerationStatus = async (
-    interactionId: string,
-    targetPrompt: string,
-    targetAspect: '16:9' | '9:16',
-    targetDuration: string,
-    targetResolution: '360p' | '720p' | '1080p',
-    attempts = 0
-  ) => {
-    if (attempts > 90) {
-      stopTimers();
-      setGenerating(false);
-      setErrorMsg('Video synthesis timed out after 4.5 minutes. Please retry with a shorter duration.');
-      onLog('[-] Gemini Omni video synthesis timed out.', 'ERROR');
+  // Load related videos when currentVideo changes (only if API key configured)
+  useEffect(() => {
+    if (!currentVideo || !apiStatus?.configured) {
+      setRelatedVideos([]);
+      return;
+    }
+    let cancelled = false;
+    setRelatedLoading(true);
+    fetchRelatedYouTube(currentVideo.id)
+      .then((res) => {
+        if (!cancelled) setRelatedVideos(res.videos || []);
+      })
+      .catch(() => {
+        if (!cancelled) setRelatedVideos([]);
+      })
+      .finally(() => {
+        if (!cancelled) setRelatedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentVideo?.id, apiStatus?.configured]);
+
+  // Initialize / update official YouTube IFrame Player API when currentVideo changes
+  useEffect(() => {
+    if (!currentVideo) {
+      if (ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.destroy();
+        } catch {}
+        ytPlayerRef.current = null;
+      }
       return;
     }
 
-    try {
-      const statusRes = await fetch(`/api/ai/video/status/${encodeURIComponent(interactionId)}`);
-      const statusData = await statusRes.json();
-
-      if (statusData.status === 'completed' && statusData.ready) {
-        stopTimers();
-        setGenerating(false);
-        setStatusLabel('Ready');
-
-        const newItem: WebVideoItem = {
-          id: `omni-${interactionId}`,
-          title: targetPrompt.length > 55 ? `${targetPrompt.slice(0, 52)}...` : targetPrompt,
-          channel: `Gemini Omni 1.2 (${targetResolution})`,
-          thumbnail: currentVideo.posterUrl || FEATURED_VIDEOS[0].posterUrl,
-          duration: `0:${targetDuration.replace('s', '').padStart(2, '0')}`,
-          views: `${targetAspect} AI Render`,
-          videoUrl: statusData.videoUrl,
-          downloadUrl: statusData.downloadUrl,
-          posterUrl: currentVideo.posterUrl || FEATURED_VIDEOS[0].posterUrl,
-          interactionId,
-          aspectRatio: targetAspect,
-          resolution: targetResolution,
-          isAiGenerated: true,
-        };
-
-        setVideos((prev) => [newItem, ...prev]);
-        setCurrentVideo(newItem);
-        setExtendSelected(false);
-        soundEngine.playSuccess();
-        onLog(`✓ AI Video ready (${targetDuration} @ ${targetResolution}): "${newItem.title}"`, 'SYSTEM');
-        if (audioActive) {
-          speakText('Your AI generated video is ready.', voiceGender);
-        }
-        return;
-      }
-
-      if (statusData.status === 'failed' || statusData.status === 'cancelled') {
-        stopTimers();
-        setGenerating(false);
-        const failReason = statusData.error || `Generation ${statusData.status}`;
-        setErrorMsg(failReason);
-        soundEngine.playAlertBeep();
-        onLog(`[-] AI Video synthesis failed: ${failReason}`, 'ERROR');
-        return;
-      }
-
-      setStatusLabel(`Rendering (${statusData.status || 'in_progress'})...`);
-      pollTimerRef.current = window.setTimeout(() => {
-        pollGenerationStatus(
-          interactionId,
-          targetPrompt,
-          targetAspect,
-          targetDuration,
-          targetResolution,
-          attempts + 1
-        );
-      }, 3000);
-    } catch (err: any) {
-      pollTimerRef.current = window.setTimeout(() => {
-        pollGenerationStatus(
-          interactionId,
-          targetPrompt,
-          targetAspect,
-          targetDuration,
-          targetResolution,
-          attempts + 1
-        );
-      }, 3500);
+    if (currentVideo.embeddable === false) {
+      setPlayerError('The video owner has disabled embedded playback outside YouTube.');
+      return;
     }
-  };
 
-  const handleGenerateVideo = async (e?: React.FormEvent, overridePrompt?: string) => {
-    if (e) e.preventDefault();
-    const targetPrompt = (overridePrompt || prompt).trim();
-    if (!targetPrompt || generating) return;
+    let cancelled = false;
+    setPlayerError(null);
+    setPlayerReady(false);
 
-    soundEngine.playClick();
-    stopTimers();
-    setErrorMsg(null);
-    setGenerating(true);
-    setElapsedSeconds(0);
-    setStatusLabel('Submitting to Gemini Omni 1.2...');
-    setActiveTab('studio');
+    loadYouTubeIframeAPI()
+      .then((YT) => {
+        if (cancelled || !playerMountRef.current) return;
 
-    elapsedTimerRef.current = window.setInterval(() => {
-      setElapsedSeconds((s) => s + 1);
-    }, 1000);
+        // If an instance already exists, swap video cleanly inside the same iframe
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.loadVideoById === 'function') {
+          try {
+            ytPlayerRef.current.loadVideoById(currentVideo.id);
+            setPlayerReady(true);
+            return;
+          } catch {
+            // Fall through to fresh recreate
+          }
+        }
 
-    onLog(`[VIDEO_CREATOR]: Generating ${duration} ${resolution} AI video for "${targetPrompt}"...`, 'INTELLIGENCE');
+        if (ytPlayerRef.current) {
+          try {
+            ytPlayerRef.current.destroy();
+          } catch {}
+          ytPlayerRef.current = null;
+        }
 
-    try {
-      const res = await fetch('/api/ai/video/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: targetPrompt,
-          aspectRatio,
-          duration,
-          resolution,
-          imageBase64: referenceImage || undefined,
-          previousInteractionId:
-            extendSelected && currentVideo.interactionId ? currentVideo.interactionId : undefined,
-        }),
+        const hostEl = document.createElement('div');
+        hostEl.className = 'w-full h-full';
+        playerMountRef.current.innerHTML = '';
+        playerMountRef.current.appendChild(hostEl);
+
+        ytPlayerRef.current = new YT.Player(hostEl, {
+          width: '100%',
+          height: '100%',
+          videoId: currentVideo.id,
+          host: 'https://www.youtube.com',
+          playerVars: {
+            autoplay: 1,
+            controls: 1,
+            fs: 1,
+            rel: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            enablejsapi: 1,
+            origin: window.location.origin,
+          },
+          events: {
+            onReady: () => {
+              if (!cancelled) setPlayerReady(true);
+            },
+            onError: (event: any) => {
+              if (!cancelled) {
+                setPlayerError(getYouTubeErrorDescription(Number(event?.data)));
+              }
+            },
+          },
+        });
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setPlayerError(err?.message || 'Unable to load official YouTube embedded player.');
+        }
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.success || !data.interactionId) {
-        throw new Error(data.error || `HTTP ${res.status}`);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentVideo?.id, currentVideo?.embeddable]);
+
+  // Full cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (ytPlayerRef.current) {
+        try {
+          ytPlayerRef.current.destroy();
+        } catch {}
+        ytPlayerRef.current = null;
+      }
+    };
+  }, []);
+
+  const recordWatchedVideo = useCallback(
+    (video: YouTubeVideoItem) => {
+      const entry: YouTubeVideoItem = {
+        ...video,
+        watchedAt: new Date().toISOString(),
+      };
+      setHistory((prev) => {
+        const updated = [entry, ...prev.filter((item) => item.id !== video.id)].slice(0, 100);
+        persistUserState({ history: updated });
+        return updated;
+      });
+    },
+    [persistUserState]
+  );
+
+  const handleSelectVideo = useCallback(
+    (video: YouTubeVideoItem) => {
+      soundEngine.playClick();
+      setPlayerError(null);
+      setShowFullDesc(false);
+      setCurrentVideo(video);
+      recordWatchedVideo(video);
+      onLog(`▶️ Playing YouTube video inside ISHAI: "${video.title}" (${video.channelTitle})`, 'MEDIA');
+    },
+    [recordWatchedVideo, onLog]
+  );
+
+  const runSearch = useCallback(
+    async (rawQuery: string, pageToken?: string, orderOverride?: 'relevance' | 'viewCount' | 'date') => {
+      const query = rawQuery.trim();
+      if (!query) return;
+
+      setShowSuggestions(false);
+
+      // Direct YouTube URL / Video ID shortcut — works with official IFrame Player inside ISHAI
+      const directId = extractYouTubeVideoId(query);
+      if (directId && !pageToken) {
+        soundEngine.playClick();
+        if (apiStatus?.configured) {
+          setListLoading(true);
+          try {
+            const { video } = await fetchYouTubeVideo(directId);
+            handleSelectVideo(video);
+            setListLoading(false);
+            return;
+          } catch (err: any) {
+            setListLoading(false);
+            setPlayerError(err?.message || 'Unable to fetch video metadata from YouTube.');
+          }
+        }
+        handleSelectVideo({
+          id: directId,
+          title: `YouTube Video (${directId})`,
+          description: 'Loaded directly via YouTube video ID using the official YouTube IFrame Player.',
+          channelId: '',
+          channelTitle: 'YouTube',
+          thumbnail: `https://i.ytimg.com/vi/${directId}/hqdefault.jpg`,
+          publishedAt: '',
+          duration: '',
+          viewCount: '',
+          embeddable: true,
+        });
+        return;
       }
 
-      setStatusLabel('Queued on GPU cluster...');
-      pollGenerationStatus(data.interactionId, targetPrompt, aspectRatio, duration, resolution, 0);
-    } catch (err: any) {
-      stopTimers();
-      setGenerating(false);
-      soundEngine.playAlertBeep();
-      const msg = err?.message || 'AI video request failed';
-      setErrorMsg(msg);
-      onLog(`[-] Video Creator error: ${msg}`, 'ERROR');
+      if (!pageToken) {
+        soundEngine.playClick();
+        setActiveSection('search');
+        setActiveSearchQuery(query);
+        setListLoading(true);
+        setListError(null);
+        setRecentSearches((prev) => {
+          const updated = [query, ...prev.filter((item) => item.toLowerCase() !== query.toLowerCase())].slice(0, 20);
+          persistUserState({ recent_searches: updated });
+          return updated;
+        });
+      } else {
+        setLoadingMore(true);
+      }
+
+      try {
+        const order = orderOverride || searchOrder;
+        const data = await searchYouTube(query, { maxResults: 16, pageToken, order });
+        setVideos((prev) => (pageToken ? [...prev, ...data.videos] : data.videos));
+        setNextPageToken(data.nextPageToken);
+        onLog(`YouTube search: "${query}" (${data.videos.length} results)`, 'MEDIA');
+      } catch (err: any) {
+        const isMissingKey = err instanceof YouTubeClientError && !err.configured;
+        setListError({
+          message: err?.message || 'YouTube search failed.',
+          missingKey: isMissingKey,
+        });
+        if (!pageToken) setVideos([]);
+      } finally {
+        setListLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [apiStatus?.configured, handleSelectVideo, onLog, persistUserState, searchOrder]
+  );
+
+  const handleBrowseTabClick = (section: ActiveSection) => {
+    soundEngine.playClick();
+    setActiveSection(section);
+    setListError(null);
+    if (section === 'history' || section === 'favorites' || section === 'search') {
+      return;
     }
+    loadBrowseSection(section);
   };
 
-  const toggleWatchlist = (video: WebVideoItem) => {
+  const toggleFavorite = (video: YouTubeVideoItem, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     soundEngine.playClick();
-    const exists = watchlist.some((v) => v.id === video.id);
-    if (exists) {
-      const updated = watchlist.filter((v) => v.id !== video.id);
-      saveWatchlist(updated);
-      onLog(`Removed "${video.title}" from watchlist.`, 'FILES');
-    } else {
-      const updated = [video, ...watchlist];
-      saveWatchlist(updated);
-      soundEngine.playSuccess();
-      onLog(`✓ Saved "${video.title}" to watchlist.`, 'FILES');
-    }
+    const exists = favorites.some((f) => f.id === video.id);
+    const updated = exists
+      ? favorites.filter((f) => f.id !== video.id)
+      : [video, ...favorites].slice(0, 100);
+    setFavorites(updated);
+    persistUserState({ favorites: updated });
+    if (!exists) soundEngine.playSuccess();
+    onLog(
+      exists
+        ? `Removed "${video.title}" from YouTube favourites.`
+        : `Saved "${video.title}" to YouTube favourites.`,
+      'MEDIA'
+    );
   };
 
-  const handleDownload = (video: WebVideoItem) => {
+  const removeHistoryItem = (videoId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     soundEngine.playClick();
-    onLog(`Downloading MP4 clip: "${video.title}"...`, 'FILES');
-    const a = document.createElement('a');
-    a.href = video.downloadUrl || video.videoUrl;
-    a.download = `${video.title.replace(/[^a-z0-9]/gi, '_')}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    soundEngine.playSuccess();
+    const updated = history.filter((v) => v.id !== videoId);
+    setHistory(updated);
+    persistUserState({ history: updated });
   };
 
-  const handleCopyLink = (video: WebVideoItem) => {
+  const clearWatchHistory = () => {
     soundEngine.playClick();
-    const url = video.videoUrl.startsWith('http')
-      ? video.videoUrl
-      : window.location.origin + video.videoUrl;
-    navigator.clipboard.writeText(url);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-    soundEngine.playSuccess();
-    onLog(`✓ Copied video stream link: ${url}`, 'SYSTEM');
+    setHistory([]);
+    persistUserState({ history: [] });
+    onLog('Cleared YouTube watch history.', 'MEDIA');
   };
 
-  const isCurrentInWatchlist = watchlist.some((v) => v.id === currentVideo.id);
+  const removeRecentSearch = (term: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = recentSearches.filter((s) => s !== term);
+    setRecentSearches(updated);
+    persistUserState({ recent_searches: updated });
+  };
+
+  const toggleTheme = () => {
+    soundEngine.playClick();
+    const next = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    persistUserState({ theme: next });
+  };
+
+  const handleCopyVideoId = () => {
+    if (!currentVideo) return;
+    navigator.clipboard.writeText(`https://www.youtube.com/watch?v=${currentVideo.id}`);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 1800);
+  };
+
+  const isDark = theme === 'dark';
+  const displayedList =
+    activeSection === 'favorites'
+      ? favorites
+      : activeSection === 'history'
+      ? history
+      : videos;
+
+  const isFavorite = (id?: string) => Boolean(id && favorites.some((f) => f.id === id));
+
+  // Theme tokens (60-30-10 neutral hierarchy with red accent reserved strictly for YouTube brand actions)
+  const bgShell = isDark ? 'bg-[#0b0d11] text-zinc-100 border-zinc-800' : 'bg-[#f8f9fb] text-zinc-900 border-zinc-200';
+  const bgHeader = isDark ? 'bg-[#11141b] border-zinc-800/90' : 'bg-white border-zinc-200';
+  const bgSurface = isDark ? 'bg-[#141821] border-zinc-800' : 'bg-white border-zinc-200 shadow-xs';
+  const bgSubtle = isDark ? 'bg-zinc-900/80 border-zinc-800 text-zinc-300' : 'bg-zinc-100 border-zinc-200 text-zinc-700';
+  const textMuted = isDark ? 'text-zinc-400' : 'text-zinc-600';
+  const inputTheme = isDark
+    ? 'bg-[#090b0f] border-zinc-700 text-zinc-100 placeholder:text-zinc-500 focus:border-red-500'
+    : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder:text-zinc-500 focus:border-red-600';
 
   return (
-    <ModalWrapper title="🎬 VIDEO CREATOR STUDIO · GEMINI OMNI AI" onClose={onClose}>
-      <div className="flex flex-col max-h-[675px] font-mono text-emerald-400">
-        {/* Banner */}
-        <div className="bg-emerald-950/40 border border-emerald-800/80 px-2.5 py-1 rounded mb-2 flex items-center justify-between text-[11px]">
-          <span className="flex items-center gap-1.5 text-emerald-300 font-bold">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            GEMINI OMNI 1.2 VIDEO ENGINE · TEXT &amp; IMAGE TO MP4
-          </span>
-          <span className="text-emerald-500 text-[10px]">NATIVE MP4 · ZERO EMBEDS</span>
-        </div>
-
-        {/* Prompt Presets */}
-        <div className="flex gap-1.5 overflow-x-auto pb-1.5 mb-2 border-b border-emerald-950 text-[10px] scrollbar-none items-center">
-          <span className="text-emerald-600 whitespace-nowrap font-bold">Scene Prompts:</span>
-          {PRESETS.map((p, idx) => (
-            <button
-              key={idx}
-              type="button"
-              disabled={generating}
-              onClick={() => setPrompt(p)}
-              className="bg-black border border-emerald-900/80 hover:border-emerald-400 hover:bg-emerald-950 text-emerald-300 px-2.5 py-0.5 rounded whitespace-nowrap transition-colors text-[10px] cursor-pointer"
-            >
-              {p.slice(0, 38)}...
-            </button>
-          ))}
-        </div>
-
-        {/* Generation Controls Form */}
-        <form onSubmit={(e) => handleGenerateVideo(e)} className="space-y-2 mb-2.5">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Describe the scene to generate with Gemini Omni AI (camera motion, lighting, subject)..."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              disabled={generating}
-              autoFocus
-              className="flex-1 bg-black border border-emerald-800 focus:border-emerald-400 text-xs text-emerald-300 px-3 py-2 rounded focus:outline-none placeholder:text-emerald-800 font-mono shadow-[inset_0_1px_3px_rgba(0,0,0,0.8)]"
-            />
-            <button
-              type="submit"
-              disabled={generating || !prompt.trim()}
-              className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500 text-black font-extrabold text-xs px-5 py-2 rounded transition-colors whitespace-nowrap cursor-pointer shadow-[0_0_15px_rgba(16,185,129,0.3)]"
-            >
-              {generating ? `RENDERING (${elapsedSeconds}s)` : '⚡ GENERATE AI VIDEO'}
-            </button>
+    <div
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="ISHAI YouTube Player"
+    >
+      <div
+        className={`w-full ${
+          theaterMode ? 'max-w-[98vw] h-[95dvh]' : 'max-w-7xl h-[92dvh]'
+        } rounded-2xl border flex flex-col overflow-hidden transition-all duration-200 shadow-2xl ${bgShell}`}
+      >
+        {/* Top Bar (Clean Single-Row Workspace Header) */}
+        <header className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b shrink-0 ${bgHeader}`}>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shadow-sm">
+              <Play className="w-4 h-4 fill-current ml-0.5" />
+            </div>
+            <div>
+              <h2 className="text-sm sm:text-base font-bold tracking-tight leading-none">
+                ISHAI YouTube Player
+              </h2>
+              <p className={`text-[11px] mt-1 ${textMuted}`}>
+                {activeUid
+                  ? cloudSynced
+                    ? `Signed in · ${userEmail || 'Account synced'}`
+                    : 'Signed in · Local sync active'
+                  : 'Guest session · Sign in to sync across devices'}
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-[10px] bg-black/60 border border-emerald-950 rounded px-2.5 py-1.5">
-            <label className="flex items-center gap-1 text-emerald-500">
-              <span>Aspect:</span>
-              <select
-                value={aspectRatio}
-                onChange={(e) => setAspectRatio(e.target.value as '16:9' | '9:16')}
-                disabled={generating}
-                className="bg-black border border-emerald-800 text-emerald-300 rounded px-1.5 py-0.5"
-              >
-                <option value="16:9">16:9 Widescreen</option>
-                <option value="9:16">9:16 Vertical</option>
-              </select>
-            </label>
-
-            <label className="flex items-center gap-1 text-emerald-500">
-              <span>Duration:</span>
-              <select
-                value={duration}
-                onChange={(e) => setDuration(e.target.value as '5s' | '8s' | '10s' | '15s')}
-                disabled={generating}
-                className="bg-black border border-emerald-800 text-emerald-300 rounded px-1.5 py-0.5"
-              >
-                <option value="5s">5s</option>
-                <option value="8s">8s</option>
-                <option value="10s">10s</option>
-                <option value="15s">15s</option>
-              </select>
-            </label>
-
-            <label className="flex items-center gap-1 text-emerald-500">
-              <span>Quality:</span>
-              <select
-                value={resolution}
-                onChange={(e) => setResolution(e.target.value as '360p' | '720p' | '1080p')}
-                disabled={generating}
-                className="bg-black border border-emerald-800 text-emerald-300 rounded px-1.5 py-0.5"
-              >
-                <option value="360p">360p Draft</option>
-                <option value="720p">720p HD</option>
-                <option value="1080p">1080p Full HD</option>
-              </select>
-            </label>
-
-            <label className="cursor-pointer bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 px-2 py-0.5 rounded flex items-center gap-1">
-              <span>{referenceName ? `Frame: ${referenceName.slice(0, 14)}` : '+ Ref Frame'}</span>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleReferenceUpload}
-                className="hidden"
-              />
-            </label>
-            {referenceImage && (
-              <button
-                type="button"
-                onClick={() => {
-                  setReferenceImage(null);
-                  setReferenceName('');
-                }}
-                className="text-red-400 hover:text-red-300"
-              >
-                Clear
-              </button>
-            )}
-
-            {currentVideo.interactionId && (
-              <label className="ml-auto flex items-center gap-1 text-cyan-300 cursor-pointer">
+          {/* Search Input & Autocomplete */}
+          <div ref={searchBoxRef} className="relative flex-1 min-w-[240px] max-w-2xl order-3 sm:order-2 w-full sm:w-auto">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                runSearch(searchInput);
+              }}
+              className="flex items-center gap-2"
+            >
+              <div className="relative flex-1">
+                <Search className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none ${textMuted}`} />
                 <input
-                  type="checkbox"
-                  checked={extendSelected}
-                  onChange={(e) => setExtendSelected(e.target.checked)}
-                  className="accent-emerald-400"
+                  type="text"
+                  value={searchInput}
+                  onFocus={() => setShowSuggestions(true)}
+                  onChange={(e) => {
+                    setSearchInput(e.target.value);
+                    setShowSuggestions(true);
+                  }}
+                  placeholder="Search YouTube videos, music, creators, or paste a YouTube URL..."
+                  className={`w-full pl-9 pr-9 py-2 rounded-xl border text-xs sm:text-sm focus:outline-none transition-colors ${inputTheme}`}
                 />
-                <span>Extend Current AI Clip</span>
-              </label>
-            )}
-          </div>
-        </form>
-
-        {errorMsg && (
-          <div className="mb-2 px-3 py-2 rounded bg-red-950/50 border border-red-700 text-red-200 text-[11px] flex items-center justify-between gap-2">
-            <span>{errorMsg}</span>
-            <button
-              type="button"
-              onClick={() => setErrorMsg(null)}
-              className="text-red-400 hover:text-white px-1.5"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-
-        {/* Primary HTML5 MP4 Video Stage */}
-        <div className="bg-black/95 border border-emerald-900 rounded p-2 mb-2.5 flex flex-col items-center justify-center relative overflow-hidden">
-          <div className="relative w-full aspect-video max-h-[270px] rounded overflow-hidden bg-black border border-emerald-950 shadow-[0_0_30px_rgba(16,185,129,0.15)] flex items-center justify-center">
-            <video
-              key={currentVideo.videoUrl}
-              src={currentVideo.videoUrl}
-              poster={currentVideo.posterUrl}
-              controls
-              autoPlay
-              playsInline
-              className="w-full h-full object-contain bg-black"
-              onError={(e) => console.error('HTML5 Video playback error:', e)}
-            />
-
-            <div className="absolute top-2 left-2 z-10 pointer-events-none flex items-center gap-1.5">
-              <div className="bg-black/75 backdrop-blur px-2 py-0.5 rounded border border-emerald-900 text-[9px] text-emerald-400 font-bold tracking-widest uppercase">
-                {currentVideo.isAiGenerated ? 'GEMINI OMNI AI RENDER' : 'ISHAI STUDIO MP4'}
+                {searchInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchInput('');
+                      setSuggestions([]);
+                    }}
+                    className={`absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-zinc-500/20 ${textMuted}`}
+                    aria-label="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.8)]" />
-            </div>
-
-            {generating && (
-              <div className="absolute inset-0 z-20 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-2 text-center p-4">
-                <div className="w-9 h-9 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                <div className="text-xs font-bold text-emerald-300">{statusLabel || 'Synthesizing MP4 frames...'}</div>
-                <div className="text-[10px] text-emerald-500">Elapsed: {elapsedSeconds}s · {resolution} · {aspectRatio}</div>
-              </div>
-            )}
-          </div>
-
-          {/* Current Video Info & Controls */}
-          <div className="w-full mt-2 pt-2 border-t border-emerald-950 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs px-1">
-            <div className="flex-1 min-w-0 pr-2">
-              <h3 className="text-emerald-200 font-bold text-sm truncate" title={currentVideo.title}>
-                {currentVideo.title}
-              </h3>
-              <div className="flex items-center gap-2 text-[11px] text-emerald-600 mt-0.5">
-                <span className="text-emerald-400 font-semibold">{currentVideo.channel}</span>
-                <span>•</span>
-                <span>{currentVideo.duration}</span>
-                <span>•</span>
-                <span>{currentVideo.views}</span>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
               <button
-                type="button"
-                onClick={() => toggleWatchlist(currentVideo)}
-                className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-colors ${
-                  isCurrentInWatchlist
-                    ? 'bg-emerald-950 border-emerald-400 text-emerald-300'
-                    : 'bg-black border-emerald-900 text-zinc-400 hover:border-emerald-600 hover:text-emerald-300'
-                }`}
+                type="submit"
+                disabled={!searchInput.trim()}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                {isCurrentInWatchlist ? '★ SAVED' : '☆ SAVE'}
+                Search
               </button>
+            </form>
 
-              <button
-                type="button"
-                onClick={() => handleCopyLink(currentVideo)}
-                className="bg-black hover:bg-emerald-950 border border-emerald-900 text-emerald-400 px-2 py-1 rounded text-[11px] transition-colors"
-              >
-                {copiedLink ? '✓ COPIED' : '🔗 LINK'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleDownload(currentVideo)}
-                className="bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold px-3.5 py-1 rounded text-[11px] transition-all shadow-[0_0_12px_rgba(16,185,129,0.35)] active:scale-95 flex items-center gap-1 cursor-pointer"
-              >
-                <span>↓ DOWNLOAD MP4</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setFullScreen(true)}
-                className="border border-emerald-900 hover:bg-emerald-950 text-emerald-400 px-2 py-1 rounded text-[11px]"
-                title="Fullscreen mode"
-              >
-                🔍
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Studio / Watchlist Tabs */}
-        <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-emerald-950 text-xs">
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setActiveTab('studio')}
-              className={`px-3 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                activeTab === 'studio'
-                  ? 'bg-emerald-500 text-black'
-                  : 'text-emerald-500 hover:bg-emerald-950'
-              }`}
-            >
-              🔥 STUDIO CLIPS ({videos.length})
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('watchlist')}
-              className={`px-3 py-0.5 rounded text-[11px] font-bold transition-colors ${
-                activeTab === 'watchlist'
-                  ? 'bg-emerald-500 text-black'
-                  : 'text-emerald-500 hover:bg-emerald-950'
-              }`}
-            >
-              ⭐ MY WATCHLIST ({watchlist.length})
-            </button>
-          </div>
-          <span className="text-[10px] text-emerald-600">SELECT ANY CLIP TO PLAY OR EXTEND</span>
-        </div>
-
-        {/* Video Cards List */}
-        <div className="flex-1 overflow-y-auto max-h-[160px] pr-1 space-y-1.5 scrollbar-thin scrollbar-thumb-emerald-900">
-          {(activeTab === 'studio' ? videos : watchlist).map((v) => {
-            const isPlayingThis = currentVideo.id === v.id;
-            return (
+            {/* Live Suggestions & Recent Searches Popover */}
+            {showSuggestions && (suggestions.length > 0 || recentSearches.length > 0) && (
               <div
-                key={v.id}
-                onClick={() => {
-                  soundEngine.playClick();
-                  setCurrentVideo(v);
-                  onLog(`Now playing: "${v.title}" (${v.channel})`, 'MEDIA');
-                }}
-                className={`group flex items-center justify-between p-1.5 rounded border transition-all cursor-pointer ${
-                  isPlayingThis
-                    ? 'bg-emerald-950/60 border-emerald-400 ring-1 ring-emerald-500'
-                    : 'bg-black/80 border-emerald-950 hover:border-emerald-800 hover:bg-emerald-950/30'
+                className={`absolute left-0 right-0 top-full mt-1.5 rounded-xl border shadow-xl z-40 overflow-hidden ${bgSurface}`}
+              >
+                {suggestions.length > 0 && (
+                  <div className="py-1.5">
+                    <div className={`px-3 py-1 text-[11px] font-medium ${textMuted}`}>
+                      Search suggestions
+                    </div>
+                    {suggestions.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => {
+                          setSearchInput(s);
+                          runSearch(s);
+                        }}
+                        className={`w-full px-3 py-2 text-left text-xs flex items-center gap-2.5 transition-colors cursor-pointer ${
+                          isDark ? 'hover:bg-zinc-800/80 text-zinc-100' : 'hover:bg-zinc-100 text-zinc-900'
+                        }`}
+                      >
+                        <Search className={`w-3.5 h-3.5 shrink-0 ${textMuted}`} />
+                        <span className="truncate">{s}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {recentSearches.length > 0 && (
+                  <div className={`py-1.5 ${suggestions.length > 0 ? (isDark ? 'border-t border-zinc-800' : 'border-t border-zinc-200') : ''}`}>
+                    <div className={`px-3 py-1 text-[11px] font-medium ${textMuted}`}>
+                      Recent searches
+                    </div>
+                    {recentSearches.slice(0, 6).map((term) => (
+                      <div
+                        key={term}
+                        onClick={() => {
+                          setSearchInput(term);
+                          runSearch(term);
+                        }}
+                        className={`px-3 py-1.5 flex items-center justify-between text-xs cursor-pointer ${
+                          isDark ? 'hover:bg-zinc-800/80' : 'hover:bg-zinc-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Clock className={`w-3.5 h-3.5 shrink-0 ${textMuted}`} />
+                          <span className="truncate">{term}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => removeRecentSearch(term, e)}
+                          className={`p-1 rounded hover:text-red-500 ${textMuted}`}
+                          aria-label={`Remove ${term}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right Controls: Theme & Close */}
+          <div className="flex items-center gap-2 shrink-0 order-2 sm:order-3">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className={`p-2 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle}`}
+              title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+            >
+              {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-700" />}
+              <span className="hidden md:inline">{isDark ? 'Light' : 'Dark'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playClick();
+                onClose();
+              }}
+              className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle} hover:border-red-500/60`}
+            >
+              <X className="w-4 h-4" />
+              <span>Close</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Category & Personal Library Strip */}
+        <nav
+          aria-label="YouTube Categories and Library"
+          className={`flex items-center gap-1.5 px-4 py-2.5 border-b overflow-x-auto shrink-0 ${bgHeader}`}
+        >
+          {BROWSE_TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeSection === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => handleBrowseTabClick(tab.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                  active
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : isDark
+                    ? 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                    : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
                 }`}
               >
-                <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                  <div className="relative w-20 h-12 bg-black rounded overflow-hidden shrink-0 border border-emerald-900/60">
-                    <img
-                      src={v.thumbnail}
-                      alt={v.title}
-                      className="w-full h-full object-cover"
-                    />
-                    <span className="absolute bottom-0.5 right-0.5 bg-black/90 text-emerald-300 text-[9px] font-bold px-1 rounded">
-                      {v.duration}
-                    </span>
-                    {isPlayingThis && (
-                      <div className="absolute inset-0 bg-emerald-900/40 flex items-center justify-center">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1 pr-2">
-                    <div className="text-xs font-bold text-emerald-200 truncate group-hover:text-emerald-300">
-                      {v.title}
-                    </div>
-                    <div className="text-[10px] text-emerald-600 truncate mt-0.5">
-                      {v.channel} • {v.views}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    onClick={() => handleDownload(v)}
-                    className="border border-emerald-900 hover:border-emerald-500 hover:bg-emerald-950 text-emerald-400 text-[10px] font-bold px-2 py-1 rounded transition-colors"
-                  >
-                    ↓ MP4
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => toggleWatchlist(v)}
-                    className="text-emerald-500 hover:text-emerald-300 text-xs px-1"
-                  >
-                    {watchlist.some((item) => item.id === v.id) ? '★' : '☆'}
-                  </button>
-                </div>
-              </div>
+                <Icon className="w-3.5 h-3.5" />
+                <span>{tab.label}</span>
+              </button>
             );
           })}
-        </div>
 
-        {/* Fullscreen Overlay */}
-        {fullScreen && (
-          <div
-            onClick={() => setFullScreen(false)}
-            className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-4 cursor-pointer"
+          <div className={`h-5 w-px mx-1 shrink-0 ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`} />
+
+          <button
+            type="button"
+            onClick={() => handleBrowseTabClick('history')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              activeSection === 'history'
+                ? 'bg-red-600 text-white'
+                : isDark
+                ? 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+            }`}
           >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="max-w-5xl max-h-[85vh] w-full aspect-video overflow-hidden rounded-lg border border-emerald-500 shadow-[0_0_50px_rgba(16,185,129,0.5)] bg-black flex items-center justify-center"
-            >
-              <video
-                src={currentVideo.videoUrl}
-                poster={currentVideo.posterUrl}
-                controls
-                autoPlay
-                playsInline
-                className="w-full h-full object-contain"
-              />
+            <History className="w-3.5 h-3.5" />
+            <span className="tabular-nums">Recently Watched ({history.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleBrowseTabClick('favorites')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+              activeSection === 'favorites'
+                ? 'bg-red-600 text-white'
+                : isDark
+                ? 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+                : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+            }`}
+          >
+            <Heart className={`w-3.5 h-3.5 ${activeSection === 'favorites' ? 'fill-current' : ''}`} />
+            <span className="tabular-nums">Favourites ({favorites.length})</span>
+          </button>
+        </nav>
+
+        {/* Scrollable Workspace Content */}
+        <main className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-6">
+          {/* Honest Missing YouTube Data API Key Banner */}
+          {!statusLoading && apiStatus && !apiStatus.configured && (
+            <section className={`rounded-2xl border p-4 sm:p-5 ${bgSurface}`}>
+              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
+                    <KeyRound className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <h3 className="text-sm sm:text-base font-bold">
+                      YouTube Data API v3 Key Required for Search &amp; Browse
+                    </h3>
+                    <p className={`text-xs sm:text-sm leading-relaxed max-w-3xl ${textMuted}`}>
+                      Live YouTube search, Trending, and category discovery require a server-side{' '}
+                      <code className="px-1.5 py-0.5 rounded bg-zinc-500/15 font-mono text-xs">
+                        YOUTUBE_API_KEY
+                      </code>{' '}
+                      with <strong>YouTube Data API v3</strong> enabled in Google Cloud Console. Add it to your{' '}
+                      <code className="px-1.5 py-0.5 rounded bg-zinc-500/15 font-mono text-xs">.env</code> file
+                      or Vercel Environment Variables (never expose API keys in frontend code).
+                    </p>
+                    <p className={`text-xs ${textMuted}`}>
+                      You can still play any real YouTube video right now inside ISHAI by pasting a YouTube URL
+                      or 11-character video ID into the search bar above, or watch from your Saved Favourites &amp;
+                      History below.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusLoading(true);
+                    fetchYouTubeStatus()
+                      .then((st) => {
+                        setApiStatus(st);
+                        setStatusLoading(false);
+                        if (st.configured) loadBrowseSection('trending');
+                      })
+                      .catch(() => setStatusLoading(false));
+                  }}
+                  className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer ${bgSubtle}`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Recheck Config</span>
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* Active Video Player + Related Videos Section */}
+          {currentVideo && (
+            <section className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.75fr)_minmax(290px,1fr)] gap-5 items-start">
+              {/* Main Video Stage */}
+              <div className={`rounded-2xl border overflow-hidden ${bgSurface}`}>
+                <div className="relative w-full aspect-video bg-black">
+                  <div ref={playerMountRef} className="w-full h-full" />
+
+                  {!playerReady && !playerError && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/75 text-white gap-2 pointer-events-none">
+                      <div className="w-8 h-8 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                      <span className="text-xs font-medium text-zinc-300">
+                        Loading official YouTube Player...
+                      </span>
+                    </div>
+                  )}
+
+                  {playerError && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/95 text-white p-6 text-center gap-3">
+                      <AlertTriangle className="w-9 h-9 text-amber-400" />
+                      <h4 className="text-sm sm:text-base font-bold">Video Playback Unavailable</h4>
+                      <p className="text-xs sm:text-sm text-zinc-300 max-w-md">{playerError}</p>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentVideo(null)}
+                        className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold cursor-pointer"
+                      >
+                        Close Player
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Video Title, Channel & Action Bar */}
+                <div className="p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <h3 className="text-base sm:text-lg font-bold leading-snug text-balance">
+                        {currentVideo.title}
+                      </h3>
+                      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-xs tabular-nums ${textMuted}`}>
+                        <span className={`font-semibold ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                          {currentVideo.channelTitle}
+                        </span>
+                        {currentVideo.viewCount && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{currentVideo.viewCount}</span>
+                          </>
+                        )}
+                        {currentVideo.publishedAt && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{formatRelativeDate(currentVideo.publishedAt)}</span>
+                          </>
+                        )}
+                        {currentVideo.duration && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{currentVideo.duration}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => toggleFavorite(currentVideo, e)}
+                        className={`px-3.5 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                          isFavorite(currentVideo.id)
+                            ? 'bg-red-600 border-red-600 text-white'
+                            : `${bgSubtle} hover:border-red-500/60`
+                        }`}
+                      >
+                        <Heart className={`w-3.5 h-3.5 ${isFavorite(currentVideo.id) ? 'fill-current' : ''}`} />
+                        <span>{isFavorite(currentVideo.id) ? 'Saved' : 'Save Favourite'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleCopyVideoId}
+                        className={`px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle}`}
+                        title="Copy YouTube watch URL"
+                      >
+                        {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedId ? 'Copied' : 'Share'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTheaterMode((t) => !t)}
+                        className={`px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle}`}
+                        title={theaterMode ? 'Default size' : 'Expand workspace'}
+                      >
+                        {theaterMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                        <span className="hidden sm:inline">{theaterMode ? 'Compact' : 'Expand'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {currentVideo.description && (
+                    <div className={`pt-3 border-t ${isDark ? 'border-zinc-800' : 'border-zinc-200'}`}>
+                      <p
+                        className={`text-xs leading-relaxed whitespace-pre-line ${textMuted} ${
+                          showFullDesc ? '' : 'line-clamp-2'
+                        }`}
+                      >
+                        {currentVideo.description}
+                      </p>
+                      {currentVideo.description.length > 140 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowFullDesc((s) => !s)}
+                          className="mt-1.5 text-xs font-semibold text-red-500 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          {showFullDesc ? (
+                            <>
+                              <span>Show less</span>
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            </>
+                          ) : (
+                            <>
+                              <span>Show more</span>
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Related Videos Rail */}
+              <aside className={`rounded-2xl border p-4 space-y-3 ${bgSurface}`}>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold">Related Videos</h4>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentVideo(null)}
+                    className={`text-xs hover:underline cursor-pointer ${textMuted}`}
+                  >
+                    Hide Player
+                  </button>
+                </div>
+
+                {!apiStatus?.configured ? (
+                  <p className={`text-xs ${textMuted}`}>
+                    Configure <code className="font-mono">YOUTUBE_API_KEY</code> on the server to load live
+                    related YouTube recommendations.
+                  </p>
+                ) : relatedLoading ? (
+                  <div className="space-y-3">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="flex gap-2.5 animate-pulse">
+                        <div className="w-32 aspect-video rounded-lg bg-zinc-500/20 shrink-0" />
+                        <div className="flex-1 space-y-2 py-1">
+                          <div className="h-3 rounded bg-zinc-500/20 w-5/6" />
+                          <div className="h-2.5 rounded bg-zinc-500/20 w-1/2" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : relatedVideos.length === 0 ? (
+                  <p className={`text-xs ${textMuted}`}>No related videos found for this title.</p>
+                ) : (
+                  <div className="space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
+                    {relatedVideos.map((rv) => (
+                      <div
+                        key={rv.id}
+                        onClick={() => handleSelectVideo(rv)}
+                        className={`group flex gap-2.5 p-1.5 rounded-xl cursor-pointer transition-colors ${
+                          isDark ? 'hover:bg-zinc-800/80' : 'hover:bg-zinc-100'
+                        }`}
+                      >
+                        <div className="relative w-32 aspect-video rounded-lg overflow-hidden bg-black shrink-0">
+                          <img
+                            src={rv.thumbnail}
+                            alt={rv.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                          />
+                          {rv.duration && (
+                            <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/85 text-white text-[10px] font-semibold tabular-nums">
+                              {rv.duration}
+                            </span>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1 py-0.5">
+                          <div className="text-xs font-semibold line-clamp-2 leading-snug group-hover:text-red-500 transition-colors">
+                            {rv.title}
+                          </div>
+                          <div className={`text-[11px] truncate mt-1 ${textMuted}`}>
+                            {rv.channelTitle}
+                          </div>
+                          {rv.viewCount && (
+                            <div className={`text-[11px] truncate tabular-nums ${textMuted}`}>
+                              {rv.viewCount}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </aside>
+            </section>
+          )}
+
+          {/* Section Toolbar & Quick Topic Suggestions */}
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold">
+                  {activeSection === 'search'
+                    ? `Search results for "${activeSearchQuery}"`
+                    : activeSection === 'history'
+                    ? 'Recently Watched Videos'
+                    : activeSection === 'favorites'
+                    ? 'Saved Favourites'
+                    : BROWSE_TABS.find((t) => t.id === activeSection)?.label || 'Discover'}
+                </h3>
+                {activeSection === 'search' && recentSearches.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    <span className={`text-[11px] ${textMuted}`}>Recent:</span>
+                    {recentSearches.slice(0, 5).map((term) => (
+                      <button
+                        key={term}
+                        type="button"
+                        onClick={() => {
+                          setSearchInput(term);
+                          runSearch(term);
+                        }}
+                        className={`px-2 py-0.5 rounded-md border text-[11px] cursor-pointer ${bgSubtle}`}
+                      >
+                        {term}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Contextual Controls: Search Sort OR Clear History */}
+              <div className="flex items-center gap-2">
+                {activeSection === 'search' && activeSearchQuery && (
+                  <select
+                    value={searchOrder}
+                    onChange={(e) => {
+                      const nextOrder = e.target.value as 'relevance' | 'viewCount' | 'date';
+                      setSearchOrder(nextOrder);
+                      runSearch(activeSearchQuery, undefined, nextOrder);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-medium cursor-pointer ${inputTheme}`}
+                    aria-label="Sort search results"
+                  >
+                    <option value="relevance">Sort: Relevance</option>
+                    <option value="viewCount">Sort: Most Viewed</option>
+                    <option value="date">Sort: Upload Date</option>
+                  </select>
+                )}
+
+                {activeSection === 'history' && history.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearWatchHistory}
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 text-red-500 hover:bg-red-500/10 cursor-pointer ${
+                      isDark ? 'border-zinc-800' : 'border-zinc-200'
+                    }`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear History</span>
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="text-xs text-emerald-400 mt-3 font-mono">
-              [ CLICK OUTSIDE TO CLOSE FULLSCREEN ]
-            </div>
-          </div>
-        )}
+
+            {/* Suggested Search Starters */}
+            {apiStatus?.configured && activeSection !== 'history' && activeSection !== 'favorites' && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                <span className={`text-[11px] whitespace-nowrap ${textMuted}`}>Try searching:</span>
+                {QUICK_TOPICS.map((topic) => (
+                  <button
+                    key={topic}
+                    type="button"
+                    onClick={() => {
+                      setSearchInput(topic);
+                      runSearch(topic);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg border text-[11px] whitespace-nowrap shrink-0 transition-colors cursor-pointer ${bgSubtle} hover:border-red-500/50`}
+                  >
+                    {topic}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Error State */}
+            {listError && activeSection !== 'history' && activeSection !== 'favorites' && !listError.missingKey && (
+              <div className={`rounded-xl border p-4 flex items-center justify-between gap-3 ${bgSurface}`}>
+                <div className="flex items-center gap-2.5 text-xs sm:text-sm text-amber-500">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>{listError.message}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    activeSection === 'search'
+                      ? runSearch(activeSearchQuery)
+                      : loadBrowseSection(activeSection)
+                  }
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold shrink-0 cursor-pointer ${bgSubtle}`}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* Loading Skeleton Grid */}
+            {listLoading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {Array.from({ length: 8 }).map((_, idx) => (
+                  <div key={idx} className={`rounded-2xl border overflow-hidden animate-pulse ${bgSurface}`}>
+                    <div className="aspect-video bg-zinc-500/20" />
+                    <div className="p-3 space-y-2">
+                      <div className="h-3.5 bg-zinc-500/20 rounded w-5/6" />
+                      <div className="h-3 bg-zinc-500/20 rounded w-1/2" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : displayedList.length === 0 ? (
+              <div className={`rounded-2xl border p-8 text-center space-y-2 ${bgSurface}`}>
+                <Tv className={`w-8 h-8 mx-auto ${textMuted}`} />
+                <h4 className="text-sm font-bold">
+                  {activeSection === 'history'
+                    ? 'No Watch History Yet'
+                    : activeSection === 'favorites'
+                    ? 'No Saved Favourites Yet'
+                    : apiStatus?.configured === false
+                    ? 'Waiting for YouTube Data API Configuration'
+                    : 'No Videos Found'}
+                </h4>
+                <p className={`text-xs max-w-md mx-auto ${textMuted}`}>
+                  {activeSection === 'history'
+                    ? 'Videos you play inside ISHAI YouTube Player will appear here for quick replay.'
+                    : activeSection === 'favorites'
+                    ? 'Click the heart icon on any video card or below the player to save it to your personal favourites.'
+                    : apiStatus?.configured === false
+                    ? 'Configure YOUTUBE_API_KEY on the server or paste a direct YouTube video URL above to watch inside ISHAI.'
+                    : 'Try another search query, creator name, or category tab above.'}
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {displayedList.map((video) => {
+                    const isPlayingThis = currentVideo?.id === video.id;
+                    const fav = isFavorite(video.id);
+                    return (
+                      <article
+                        key={`${activeSection}-${video.id}`}
+                        onClick={() => handleSelectVideo(video)}
+                        className={`group rounded-2xl border overflow-hidden cursor-pointer transition-all duration-200 hover:-translate-y-0.5 flex flex-col ${bgSurface} ${
+                          isPlayingThis ? 'ring-2 ring-red-600 border-red-600' : ''
+                        }`}
+                      >
+                        <div className="relative aspect-video bg-black overflow-hidden">
+                          <img
+                            src={video.thumbnail}
+                            alt={video.title}
+                            referrerPolicy="no-referrer"
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          />
+                          {video.duration && (
+                            <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/85 text-white text-[11px] font-semibold tabular-nums">
+                              {video.duration}
+                            </span>
+                          )}
+                          {isPlayingThis && (
+                            <div className="absolute inset-0 bg-black/55 flex items-center justify-center">
+                              <span className="px-3 py-1 rounded-lg bg-red-600 text-white text-xs font-bold flex items-center gap-1.5">
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                Playing
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="p-3.5 flex-1 flex flex-col justify-between gap-2.5">
+                          <div className="space-y-1">
+                            <h4 className="text-xs sm:text-sm font-bold line-clamp-2 leading-snug group-hover:text-red-500 transition-colors">
+                              {video.title}
+                            </h4>
+                            <div className={`text-[11px] flex flex-wrap items-center gap-x-1.5 tabular-nums ${textMuted}`}>
+                              <span className="font-medium truncate max-w-[180px]">{video.channelTitle}</span>
+                              {video.viewCount && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{video.viewCount}</span>
+                                </>
+                              )}
+                              {video.publishedAt && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{formatRelativeDate(video.publishedAt)}</span>
+                                </>
+                              )}
+                            </div>
+                            {video.description && (
+                              <p className={`text-[11px] line-clamp-2 leading-relaxed pt-0.5 ${textMuted}`}>
+                                {video.description}
+                              </p>
+                            )}
+                          </div>
+
+                          <div
+                            className={`flex items-center justify-between pt-2 border-t ${
+                              isDark ? 'border-zinc-800/80' : 'border-zinc-100'
+                            }`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectVideo(video)}
+                              className="text-xs font-semibold text-red-500 hover:text-red-400 flex items-center gap-1 cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Watch</span>
+                            </button>
+
+                            <div className="flex items-center gap-1.5">
+                              {activeSection === 'history' && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => removeHistoryItem(video.id, e)}
+                                  className={`p-1.5 rounded-lg hover:text-red-500 transition-colors cursor-pointer ${textMuted}`}
+                                  title="Remove from watch history"
+                                  aria-label="Remove from watch history"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => toggleFavorite(video, e)}
+                                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                                  fav ? 'text-red-500' : `${textMuted} hover:text-red-500`
+                                }`}
+                                title={fav ? 'Remove from favourites' : 'Save to favourites'}
+                                aria-label={fav ? 'Remove from favourites' : 'Save to favourites'}
+                              >
+                                <Heart className={`w-4 h-4 ${fav ? 'fill-current' : ''}`} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                {/* Pagination Load More for Search / Browse */}
+                {nextPageToken && activeSection !== 'history' && activeSection !== 'favorites' && (
+                  <div className="flex justify-center pt-2">
+                    <button
+                      type="button"
+                      disabled={loadingMore}
+                      onClick={() =>
+                        activeSection === 'search'
+                          ? runSearch(activeSearchQuery, nextPageToken)
+                          : loadBrowseSection(activeSection, nextPageToken)
+                      }
+                      className={`px-5 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${bgSubtle}`}
+                    >
+                      {loadingMore ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Loading more videos...</span>
+                        </>
+                      ) : (
+                        <span>Load More Videos</span>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </main>
       </div>
-    </ModalWrapper>
+    </div>
   );
 };
+
+// Preserve existing import compatibility in App.tsx while renaming feature to YouTube Player
+export const VideoCreatorModal = YouTubePlayerModal;
