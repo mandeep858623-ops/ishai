@@ -307,6 +307,8 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       return;
     }
 
+    console.log('[ISHAI YouTube Player] Active currentVideo updated:', currentVideo.id, currentVideo.title, 'Embeddable:', currentVideo.embeddable);
+
     if (currentVideo.embeddable === false) {
       destroyYouTubePlayer();
       setPlayerError('The video owner has disabled embedded playback outside YouTube.');
@@ -476,14 +478,17 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
 
       // Direct YouTube URL / Video ID shortcut — works with official IFrame Player inside ISHAI
       const directId = extractYouTubeVideoId(query);
+      console.log('[ISHAI YouTube Player] Input query:', query, 'Extracted directId:', directId);
       if (directId && !pageToken) {
         soundEngine.playClick();
         setListError(null);
         try {
           const { video } = await fetchYouTubeVideo(directId);
+          console.log('[ISHAI YouTube Player] Fetched video metadata via oembed for ID:', directId, video);
           handleSelectVideo(video);
           return;
         } catch (err: any) {
+          console.warn('[ISHAI YouTube Player] oembed fetch failed for direct ID:', directId, err?.message);
           if (err?.status === 404 || err?.code === 'VIDEO_UNAVAILABLE') {
             setCurrentVideo({
               id: directId,
@@ -501,6 +506,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
             return;
           }
         }
+        console.log('[ISHAI YouTube Player] Loading direct video object into player:', directId);
         handleSelectVideo({
           id: directId,
           title: `YouTube Video (${directId})`,
