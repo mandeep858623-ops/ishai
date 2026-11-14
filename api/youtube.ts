@@ -27,7 +27,6 @@ function handleError(res: ServerResponse, err: any): void {
       error: err.message,
       code: err.code,
       configured: err.configured,
-      requiredEnvVar: err.requiredEnvVar || 'YOUTUBE_API_KEY',
     });
     return;
   }
@@ -36,8 +35,7 @@ function handleError(res: ServerResponse, err: any): void {
     success: false,
     error: err?.message || 'YouTube service failed.',
     code: 'YOUTUBE_INTERNAL_ERROR',
-    configured: Boolean(process.env.YOUTUBE_API_KEY || process.env.GOOGLE_YOUTUBE_API_KEY),
-    requiredEnvVar: 'YOUTUBE_API_KEY',
+    configured: true,
   });
 }
 

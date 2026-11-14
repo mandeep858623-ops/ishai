@@ -31,9 +31,7 @@ export type YouTubeBrowseSection =
 
 export interface YouTubeApiStatus {
   configured: boolean;
-  apiKeyConfigured?: boolean;
   mode?: string;
-  requiredEnvVar: string;
   regionCode: string;
   setupInstructions: string;
 }
@@ -49,21 +47,18 @@ export class YouTubeClientError extends Error {
   status: number;
   code: string;
   configured: boolean;
-  requiredEnvVar?: string;
 
   constructor(
     message: string,
     status = 500,
     code = 'YOUTUBE_ERROR',
-    configured = true,
-    requiredEnvVar?: string
+    configured = true
   ) {
     super(message);
     this.name = 'YouTubeClientError';
     this.status = status;
     this.code = code;
     this.configured = configured;
-    this.requiredEnvVar = requiredEnvVar;
   }
 }
 
@@ -182,8 +177,7 @@ async function apiGet<T>(url: string): Promise<T> {
       data?.error || `Request failed (HTTP ${res.status})`,
       res.status,
       data?.code || 'YOUTUBE_ERROR',
-      data?.configured ?? res.status !== 503,
-      data?.requiredEnvVar
+      data?.configured ?? true
     );
   }
   return data as T;

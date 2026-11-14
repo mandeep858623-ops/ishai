@@ -1996,7 +1996,7 @@ app.post('/api/ai/universal-song-search', async (req, res) => {
   }
 });
 
-// Official YouTube Data API v3 Routes (Server-side API Key & Quota Caching)
+// Keyless Public YouTube & Official oEmbed Routes
 const handleYouTubeRouteError = (res: any, err: any) => {
   if (err instanceof YouTubeServiceError) {
     return res.status(err.status).json({
@@ -2004,7 +2004,6 @@ const handleYouTubeRouteError = (res: any, err: any) => {
       error: err.message,
       code: err.code,
       configured: err.configured,
-      requiredEnvVar: err.requiredEnvVar || 'YOUTUBE_API_KEY',
     });
   }
   console.error('[YouTube API Error]:', err);
@@ -2012,7 +2011,7 @@ const handleYouTubeRouteError = (res: any, err: any) => {
     success: false,
     error: err?.message || 'YouTube service failed.',
     code: 'YOUTUBE_INTERNAL_ERROR',
-    configured: Boolean(process.env.YOUTUBE_API_KEY || process.env.GOOGLE_YOUTUBE_API_KEY),
+    configured: true,
   });
 };
 

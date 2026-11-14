@@ -19,7 +19,6 @@ import {
   Minimize2,
   Trash2,
   AlertTriangle,
-  KeyRound,
   ChevronDown,
   ChevronUp,
   Check,
@@ -27,6 +26,8 @@ import {
   RefreshCw,
   Clock,
   Tv,
+  Pause,
+  ExternalLink,
 } from 'lucide-react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
@@ -34,9 +35,6 @@ import { soundEngine } from '../utils/audio';
 import {
   YouTubeVideoItem,
   YouTubeBrowseSection,
-  YouTubeApiStatus,
-  YouTubeClientError,
-  fetchYouTubeStatus,
   searchYouTube,
   browseYouTube,
   fetchYouTubeVideo,
@@ -111,10 +109,6 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
-  // API configuration status
-  const [apiStatus, setApiStatus] = useState<YouTubeApiStatus | null>(null);
-  const [statusLoading, setStatusLoading] = useState<boolean>(true);
-
   // Navigation & discovery
   const [activeSection, setActiveSection] = useState<ActiveSection>('trending');
   const [searchInput, setSearchInput] = useState<string>('');
@@ -128,7 +122,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
   const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState<boolean>(false);
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
-  const [listError, setListError] = useState<{ message: string; missingKey?: boolean } | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
 
   // Active playback state
   const [currentVideo, setCurrentVideo] = useState<YouTubeVideoItem | null>(null);
@@ -136,11 +130,11 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
   const [relatedLoading, setRelatedLoading] = useState<boolean>(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [theaterMode, setTheaterMode] = useState<boolean>(false);
   const [showFullDesc, setShowFullDesc] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<boolean>(false);
   const [autoplayOnLoad, setAutoplayOnLoad] = useState<boolean>(false);
-  const [dismissKeyNotice, setDismissKeyNotice] = useState<boolean>(false);
   const [iframeApiFallback, setIframeApiFallback] = useState<boolean>(false);
 
   const ytPlayerRef = useRef<any>(null);
@@ -240,11 +234,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
           setCurrentVideo((prev) => prev || loadedVideos[0]);
         }
       } catch (err: any) {
-        const isMissingKey = err instanceof YouTubeClientError && !err.configured;
-        setListError({
-          message: err?.message || 'Unable to load YouTube videos right now.',
-          missingKey: isMissingKey,
-        });
+        setListError(err?.message || 'Unable to load public YouTube discovery right now. Paste any YouTube URL or Video ID above to play directly.');
         if (!pageToken) setVideos([]);
       } finally {
         setListLoading(false);
@@ -254,24 +244,9 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     []
   );
 
-  // Check API configuration status and immediately load playable Trending videos
+  // Immediately load public discovery videos on open (100% keyless)
   useEffect(() => {
-    let active = true;
-    setStatusLoading(true);
     loadBrowseSection('trending');
-    fetchYouTubeStatus()
-      .then((status) => {
-        if (!active) return;
-        setApiStatus(status);
-        setStatusLoading(false);
-      })
-      .catch(() => {
-        if (!active) return;
-        setStatusLoading(false);
-      });
-    return () => {
-      active = false;
-    };
   }, [loadBrowseSection]);
 
   // Debounced live search suggestions
@@ -419,10 +394,16 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
                 }
               } catch {}
             },
+            onStateChange: (event: any) => {
+              if (!cancelled) {
+                setIsPlaying(Number(event?.data) === 1);
+              }
+            },
             onError: (event: any) => {
               if (!cancelled) {
                 window.clearTimeout(readyFallbackTimer);
                 setPlayerReady(true);
+                setIsPlaying(false);
                 setPlayerError(getYouTubeErrorDescription(Number(event?.data)));
               }
             },
@@ -497,16 +478,27 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       const directId = extractYouTubeVideoId(query);
       if (directId && !pageToken) {
         soundEngine.playClick();
-        if (apiStatus?.configured) {
-          setListLoading(true);
-          try {
-            const { video } = await fetchYouTubeVideo(directId);
-            handleSelectVideo(video);
-            setListLoading(false);
+        setListError(null);
+        try {
+          const { video } = await fetchYouTubeVideo(directId);
+          handleSelectVideo(video);
+          return;
+        } catch (err: any) {
+          if (err?.status === 404 || err?.code === 'VIDEO_UNAVAILABLE') {
+            setCurrentVideo({
+              id: directId,
+              title: `YouTube Video (${directId})`,
+              description: '',
+              channelId: '',
+              channelTitle: 'YouTube',
+              thumbnail: `https://i.ytimg.com/vi/${directId}/hqdefault.jpg`,
+              publishedAt: '',
+              duration: '',
+              viewCount: '',
+              embeddable: true,
+            });
+            setPlayerError(err?.message || 'This video is unavailable, deleted, or private on YouTube.');
             return;
-          } catch (err: any) {
-            setListLoading(false);
-            setPlayerError(err?.message || 'Unable to fetch video metadata from YouTube.');
           }
         }
         handleSelectVideo({
@@ -524,17 +516,24 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
         return;
       }
 
+      // Guard against malformed youtube.com / youtu.be URLs
+      if (/^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\b/i.test(query) && !pageToken) {
+        setListError('Could not extract a valid 11-character YouTube Video ID from that URL. Please paste a full watch link, youtu.be link, Shorts link, or 11-character ID.');
+        return;
+      }
+
       if (!pageToken) {
         soundEngine.playClick();
         setActiveSection('search');
         setActiveSearchQuery(query);
         setListLoading(true);
         setListError(null);
-        setRecentSearches((prev) => {
-          const updated = [query, ...prev.filter((item) => item.toLowerCase() !== query.toLowerCase())].slice(0, 20);
-          persistUserState({ recent_searches: updated });
-          return updated;
-        });
+        const updatedSearches = [
+          query,
+          ...userStateRef.current.recent_searches.filter((item) => item.toLowerCase() !== query.toLowerCase()),
+        ].slice(0, 20);
+        setRecentSearches(updatedSearches);
+        persistUserState({ recent_searches: updatedSearches });
       } else {
         setLoadingMore(true);
       }
@@ -546,18 +545,14 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
         setNextPageToken(data.nextPageToken);
         onLog(`YouTube search: "${query}" (${data.videos.length} results)`, 'MEDIA');
       } catch (err: any) {
-        const isMissingKey = err instanceof YouTubeClientError && !err.configured;
-        setListError({
-          message: err?.message || 'YouTube search failed.',
-          missingKey: isMissingKey,
-        });
+        setListError(err?.message || 'Public YouTube search is unavailable right now. Use "Search on YouTube" or paste a direct video URL/ID.');
         if (!pageToken) setVideos([]);
       } finally {
         setListLoading(false);
         setLoadingMore(false);
       }
     },
-    [apiStatus?.configured, handleSelectVideo, onLog, persistUserState, searchOrder]
+    [handleSelectVideo, onLog, persistUserState, searchOrder]
   );
 
   const handleBrowseTabClick = (section: ActiveSection) => {
@@ -717,8 +712,20 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
                 disabled={!searchInput.trim()}
                 className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                Search
+                {extractYouTubeVideoId(searchInput) ? 'Play ID' : 'Search'}
               </button>
+              <a
+                href={`https://www.youtube.com/results?search_query=${encodeURIComponent(
+                  searchInput.trim() || activeSearchQuery || 'music'
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors ${bgSubtle}`}
+                title="Open YouTube search results in a separate browser tab as fallback"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">YouTube</span>
+              </a>
             </form>
 
             {/* Live Suggestions & Recent Searches Popover */}
@@ -874,27 +881,6 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
 
         {/* Scrollable Workspace Content */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-6">
-          {/* Subtle Non-Blocking Info Notice when optional YOUTUBE_API_KEY is not set */}
-          {!statusLoading && !dismissKeyNotice && apiStatus && apiStatus.apiKeyConfigured === false && (
-            <div className={`rounded-xl border px-3.5 py-2.5 flex items-center justify-between gap-3 text-xs ${bgSurface}`}>
-              <div className="flex items-center gap-2 min-w-0">
-                <KeyRound className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className={`truncate ${textMuted}`}>
-                  Standard YouTube playback &amp; search active. Add{' '}
-                  <code className="font-mono">YOUTUBE_API_KEY</code> on the server for official YouTube Data API v3 quota mode.
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDismissKeyNotice(true)}
-                className={`p-1 rounded hover:bg-zinc-500/20 shrink-0 cursor-pointer ${textMuted}`}
-                aria-label="Dismiss notice"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
           {/* Active Video Player + Related Videos Section */}
           {currentVideo && (
             <section
@@ -999,6 +985,26 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {!iframeApiFallback && ytPlayerReadyRef.current && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              if (isPlaying) {
+                                ytPlayerRef.current?.pauseVideo?.();
+                              } else {
+                                ytPlayerRef.current?.playVideo?.();
+                              }
+                            } catch {}
+                          }}
+                          className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle}`}
+                          title={isPlaying ? 'Pause video' : 'Play video'}
+                        >
+                          {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                          <span>{isPlaying ? 'Pause' : 'Play'}</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={(e) => toggleFavorite(currentVideo, e)}
@@ -1245,22 +1251,35 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
 
             {/* Error State */}
             {listError && activeSection !== 'history' && activeSection !== 'favorites' && (
-              <div className={`rounded-xl border p-4 flex items-center justify-between gap-3 ${bgSurface}`}>
+              <div className={`rounded-xl border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${bgSurface}`}>
                 <div className="flex items-center gap-2.5 text-xs sm:text-sm text-amber-500">
                   <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>{listError.message}</span>
+                  <span>{listError}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    activeSection === 'search'
-                      ? runSearch(activeSearchQuery)
-                      : loadBrowseSection(activeSection)
-                  }
-                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold shrink-0 cursor-pointer ${bgSubtle}`}
-                >
-                  Retry
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <a
+                    href={`https://www.youtube.com/results?search_query=${encodeURIComponent(
+                      activeSearchQuery || searchInput.trim() || 'trending videos'
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 ${bgSubtle}`}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open YouTube Search</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      activeSection === 'search'
+                        ? runSearch(activeSearchQuery)
+                        : loadBrowseSection(activeSection)
+                    }
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer ${bgSubtle}`}
+                  >
+                    Retry
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1278,26 +1297,37 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
                 ))}
               </div>
             ) : displayedList.length === 0 ? (
-              <div className={`rounded-2xl border p-8 text-center space-y-2 ${bgSurface}`}>
+              <div className={`rounded-2xl border p-8 text-center space-y-3 ${bgSurface}`}>
                 <Tv className={`w-8 h-8 mx-auto ${textMuted}`} />
                 <h4 className="text-sm font-bold">
                   {activeSection === 'history'
                     ? 'No Watch History Yet'
                     : activeSection === 'favorites'
                     ? 'No Saved Favourites Yet'
-                    : apiStatus?.configured === false
-                    ? 'Waiting for YouTube Data API Configuration'
-                    : 'No Videos Found'}
+                    : 'No Videos Loaded'}
                 </h4>
                 <p className={`text-xs max-w-md mx-auto ${textMuted}`}>
                   {activeSection === 'history'
                     ? 'Videos you play inside ISHAI YouTube Player will appear here for quick replay.'
                     : activeSection === 'favorites'
                     ? 'Click the heart icon on any video card or below the player to save it to your personal favourites.'
-                    : apiStatus?.configured === false
-                    ? 'Configure YOUTUBE_API_KEY on the server or paste a direct YouTube video URL above to watch inside ISHAI.'
-                    : 'Try another search query, creator name, or category tab above.'}
+                    : 'Paste any YouTube URL or 11-character video ID above to play immediately inside ISHAI, or open YouTube search in a new tab.'}
                 </p>
+                {activeSection !== 'history' && activeSection !== 'favorites' && (
+                  <div className="flex justify-center pt-1">
+                    <a
+                      href={`https://www.youtube.com/results?search_query=${encodeURIComponent(
+                        activeSearchQuery || searchInput.trim() || 'popular videos'
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`px-4 py-2 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 ${bgSubtle}`}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open YouTube Search</span>
+                    </a>
+                  </div>
+                )}
               </div>
             ) : (
               <>

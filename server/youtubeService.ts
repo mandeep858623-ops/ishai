@@ -31,25 +31,20 @@ export class YouTubeServiceError extends Error {
   status: number;
   code: string;
   configured: boolean;
-  requiredEnvVar?: string;
 
   constructor(
     message: string,
     status = 500,
     code = 'YOUTUBE_ERROR',
-    configured = true,
-    requiredEnvVar?: string
+    configured = true
   ) {
     super(message);
     this.name = 'YouTubeServiceError';
     this.status = status;
     this.code = code;
     this.configured = configured;
-    this.requiredEnvVar = requiredEnvVar;
   }
 }
-
-const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
 interface CacheEntry<T> {
   value: T;
@@ -58,15 +53,6 @@ interface CacheEntry<T> {
 
 const MAX_CACHE_ENTRIES = 250;
 const responseCache = new Map<string, CacheEntry<any>>();
-
-function getApiKey(): string {
-  return (
-    process.env.YOUTUBE_API_KEY ||
-    process.env.GOOGLE_YOUTUBE_API_KEY ||
-    process.env.YOUTUBE_DATA_API_KEY ||
-    ''
-  ).trim();
-}
 
 function getCached<T>(key: string): T | null {
   const entry = responseCache.get(key);
@@ -86,189 +72,9 @@ function setCached<T>(key: string, value: T, ttlMs: number): void {
   responseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
-export function formatIsoDuration(iso?: string): string {
-  if (!iso || typeof iso !== 'string') return '';
-  if (iso === 'P0D' || iso === 'PT0S') return 'LIVE';
-  const match = iso.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i);
-  if (!match) return '';
-  const hours = Number(match[1] || 0);
-  const mins = Number(match[2] || 0);
-  const secs = Number(match[3] || 0);
-  if (hours > 0) {
-    return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  }
-  return `${mins}:${String(secs).padStart(2, '0')}`;
-}
-
-export function formatViewCount(raw?: string | number): string {
-  const num = Number(raw);
-  if (!Number.isFinite(num) || num <= 0) return '';
-  if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B views`;
-  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M views`;
-  if (num >= 1_000) return `${(num / 1_000).toFixed(1).replace(/\.0$/, '')}K views`;
-  return `${num.toLocaleString()} views`;
-}
-
-function formatCompactCount(raw?: string | number): string {
-  const num = Number(raw);
-  if (!Number.isFinite(num) || num <= 0) return '';
-  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
-  if (num >= 1_000) return `${(num / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
-  return `${num}`;
-}
-
-function pickThumbnail(thumbnails: any, videoId: string): string {
-  return (
-    thumbnails?.maxres?.url ||
-    thumbnails?.standard?.url ||
-    thumbnails?.high?.url ||
-    thumbnails?.medium?.url ||
-    thumbnails?.default?.url ||
-    `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-  );
-}
-
-function mapVideoResource(item: any): YouTubeVideoItem {
-  const id = typeof item.id === 'string' ? item.id : item.id?.videoId || '';
-  const snippet = item.snippet || {};
-  const contentDetails = item.contentDetails || {};
-  const statistics = item.statistics || {};
-  const status = item.status || {};
-  const rawViews = Number(statistics.viewCount || 0);
-  const live = snippet.liveBroadcastContent && snippet.liveBroadcastContent !== 'none';
-
-  return {
-    id,
-    title: snippet.title || 'Untitled YouTube Video',
-    description: snippet.description || '',
-    channelId: snippet.channelId || '',
-    channelTitle: snippet.channelTitle || 'YouTube Creator',
-    thumbnail: pickThumbnail(snippet.thumbnails, id),
-    publishedAt: snippet.publishedAt || '',
-    duration: live ? 'LIVE' : formatIsoDuration(contentDetails.duration),
-    viewCount: formatViewCount(rawViews),
-    rawViewCount: Number.isFinite(rawViews) ? rawViews : undefined,
-    likeCount: formatCompactCount(statistics.likeCount),
-    categoryId: snippet.categoryId,
-    embeddable: status.embeddable !== false,
-    privacyStatus: status.privacyStatus || 'public',
-    ageRestricted: contentDetails?.contentRating?.ytRating === 'ytAgeRestricted',
-    liveBroadcastContent: snippet.liveBroadcastContent || 'none',
-  };
-}
-
 // ============================================================
-// Official YouTube Data API v3 Client (when YOUTUBE_API_KEY is set)
-// ============================================================
-async function ytFetch(endpoint: string, params: Record<string, string | number | undefined>): Promise<any> {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new YouTubeServiceError(
-      'YouTube Data API v3 key is not configured.',
-      503,
-      'YOUTUBE_API_KEY_MISSING',
-      false,
-      'YOUTUBE_API_KEY'
-    );
-  }
-  const url = new URL(`${YOUTUBE_API_BASE}/${endpoint}`);
-  for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== '') {
-      url.searchParams.set(k, String(v));
-    }
-  }
-  url.searchParams.set('key', apiKey);
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(url.toString(), { signal: controller.signal });
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      const apiErr = data?.error;
-      const reason = apiErr?.errors?.[0]?.reason || '';
-      const detailReason = apiErr?.details?.[0]?.reason || '';
-      const msg = apiErr?.message || `YouTube API request failed (HTTP ${res.status})`;
-
-      if (reason === 'quotaExceeded' || reason === 'dailyLimitExceeded') {
-        throw new YouTubeServiceError(
-          'YouTube Data API v3 daily quota exceeded. Try again later or increase quota in Google Cloud Console.',
-          429,
-          'YOUTUBE_QUOTA_EXCEEDED',
-          true
-        );
-      }
-      if (
-        reason === 'ipRefererBlocked' ||
-        detailReason === 'API_KEY_HTTP_REFERRER_BLOCKED' ||
-        /referer|referrer/i.test(msg)
-      ) {
-        throw new YouTubeServiceError(
-          'YouTube Data API v3 rejected this request because your Google Cloud API key has HTTP Referrer (website) restrictions enabled. Because ISHAI calls YouTube securely from the server, set Application restrictions to "None" and API restrictions to "YouTube Data API v3" in Google Cloud Console.',
-          403,
-          'YOUTUBE_API_REFERRER_BLOCKED',
-          true,
-          'YOUTUBE_API_KEY'
-        );
-      }
-      if (reason === 'accessNotConfigured' || detailReason === 'SERVICE_DISABLED') {
-        throw new YouTubeServiceError(
-          'YouTube Data API v3 is not enabled in your Google Cloud project. Enable "YouTube Data API v3" in Google Cloud Console -> APIs & Services.',
-          403,
-          'YOUTUBE_API_DISABLED',
-          true,
-          'YOUTUBE_API_KEY'
-        );
-      }
-      if (reason === 'keyInvalid' || detailReason === 'API_KEY_INVALID' || res.status === 403 || res.status === 401) {
-        throw new YouTubeServiceError(
-          `YouTube Data API v3 key error: ${msg}`,
-          res.status,
-          'YOUTUBE_API_AUTH_ERROR',
-          true,
-          'YOUTUBE_API_KEY'
-        );
-      }
-      throw new YouTubeServiceError(msg, res.status, 'YOUTUBE_API_ERROR', true);
-    }
-
-    return data;
-  } catch (err: any) {
-    if (err instanceof YouTubeServiceError) throw err;
-    if (err?.name === 'AbortError') {
-      throw new YouTubeServiceError('YouTube Data API request timed out.', 504, 'YOUTUBE_TIMEOUT', true);
-    }
-    throw new YouTubeServiceError(
-      err?.message || 'Failed to connect to YouTube Data API.',
-      502,
-      'YOUTUBE_NETWORK_ERROR',
-      true
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function enrichVideoIds(videoIds: string[]): Promise<YouTubeVideoItem[]> {
-  const cleanIds = videoIds.filter((id) => /^[a-zA-Z0-9_-]{11}$/.test(id)).slice(0, 50);
-  if (cleanIds.length === 0) return [];
-
-  const data = await ytFetch('videos', {
-    part: 'snippet,contentDetails,statistics,status',
-    id: cleanIds.join(','),
-    maxResults: cleanIds.length,
-  });
-
-  const items = Array.isArray(data?.items) ? data.items : [];
-  return items
-    .map(mapVideoResource)
-    .filter((v: YouTubeVideoItem) => v.privacyStatus !== 'private');
-}
-
-// ============================================================
-// Public YouTube Web Search & oEmbed Fallback (when API key unset)
-// Zero downloader links, zero invented mock videos — real YouTube results
+// Keyless Public YouTube Discovery & Official oEmbed Metadata
+// Zero API keys, zero downloader links, zero invented mock videos
 // ============================================================
 const YT_CONSENT_COOKIE = 'SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; CONSENT=YES+cb.20210328-17-p0.en+FX+100';
 const YT_BROWSER_UA =
@@ -398,7 +204,8 @@ function extractVideosFromYtData(rootData: any, maxResults: number): YouTubeVide
 async function searchYouTubeInnertube(
   query: string,
   maxResults: number,
-  order: 'relevance' | 'date' | 'viewCount' | 'rating'
+  order: 'relevance' | 'date' | 'viewCount' | 'rating',
+  regionCode = 'US'
 ): Promise<YouTubeVideoItem[]> {
   const spMap: Record<string, string | undefined> = {
     relevance: undefined,
@@ -426,7 +233,7 @@ async function searchYouTubeInnertube(
             clientName: 'WEB',
             clientVersion: '2.20240726.00.00',
             hl: 'en',
-            gl: (process.env.YOUTUBE_REGION_CODE || 'US').toUpperCase(),
+            gl: regionCode,
           },
         },
         query,
@@ -436,9 +243,9 @@ async function searchYouTubeInnertube(
 
     if (!res.ok) {
       throw new YouTubeServiceError(
-        `YouTube search returned HTTP ${res.status}`,
+        `Public YouTube search returned HTTP ${res.status}.`,
         res.status,
-        'YOUTUBE_UPSTREAM_ERROR',
+        'YOUTUBE_SEARCH_UNAVAILABLE',
         true
       );
     }
@@ -476,7 +283,12 @@ async function searchYouTubeResultsHtml(
       },
     });
     if (!res.ok) {
-      throw new YouTubeServiceError(`YouTube search returned HTTP ${res.status}`, res.status, 'YOUTUBE_UPSTREAM_ERROR', true);
+      throw new YouTubeServiceError(
+        `Public YouTube search returned HTTP ${res.status}.`,
+        res.status,
+        'YOUTUBE_SEARCH_UNAVAILABLE',
+        true
+      );
     }
 
     const html = await res.text();
@@ -495,14 +307,15 @@ async function searchYouTubeResultsHtml(
 async function searchYouTubePublicWeb(
   query: string,
   maxResults = 16,
-  order: 'relevance' | 'date' | 'viewCount' | 'rating' = 'relevance'
+  order: 'relevance' | 'date' | 'viewCount' | 'rating' = 'relevance',
+  regionCode = 'US'
 ): Promise<YouTubeVideoItem[]> {
-  let innertubeErr: any = null;
+  let upstreamErr: any = null;
   try {
-    const videos = await searchYouTubeInnertube(query, maxResults, order);
+    const videos = await searchYouTubeInnertube(query, maxResults, order, regionCode);
     if (videos.length > 0) return videos;
   } catch (err) {
-    innertubeErr = err;
+    upstreamErr = err;
   }
 
   let parsedHtmlData = false;
@@ -513,16 +326,15 @@ async function searchYouTubePublicWeb(
       return htmlResult.videos;
     }
   } catch (htmlErr) {
-    if (!innertubeErr) innertubeErr = htmlErr;
+    if (!upstreamErr) upstreamErr = htmlErr;
   }
 
-  if (innertubeErr || !parsedHtmlData) {
+  if (upstreamErr || !parsedHtmlData) {
     throw new YouTubeServiceError(
-      'YouTube blocked unauthenticated search from this server IP. Add YOUTUBE_API_KEY in Vercel Environment Variables and redeploy to use the official YouTube Data API v3.',
+      'Public YouTube keyword search is currently restricted by YouTube for this server. Use "Open YouTube Search" to find a video or paste any YouTube URL / Video ID to watch inside ISHAI.',
       503,
-      'YOUTUBE_API_KEY_MISSING',
-      false,
-      'YOUTUBE_API_KEY'
+      'YOUTUBE_SEARCH_UNAVAILABLE',
+      true
     );
   }
 
@@ -583,19 +395,14 @@ async function fetchYouTubeOEmbed(videoId: string): Promise<YouTubeVideoItem> {
 }
 
 // ============================================================
-// Public Service Functions
+// Public Service Functions (100% Keyless)
 // ============================================================
 export function getYouTubeStatus() {
-  const apiKeyConfigured = Boolean(getApiKey());
   return {
     configured: true,
-    apiKeyConfigured,
-    mode: apiKeyConfigured ? 'youtube_data_api_v3' : 'youtube_web_discovery',
-    requiredEnvVar: 'YOUTUBE_API_KEY',
-    regionCode: process.env.YOUTUBE_REGION_CODE || 'US',
-    setupInstructions: apiKeyConfigured
-      ? 'YouTube Data API v3 is connected on the server.'
-      : 'Live YouTube playback & discovery are active. Add server-side YOUTUBE_API_KEY (.env or Vercel Environment Variables) if you want official YouTube Data API v3 quota mode.',
+    mode: 'keyless_iframe_player',
+    regionCode: 'US',
+    setupInstructions: 'Keyless YouTube IFrame Player is active. Paste any YouTube URL/Video ID or use public discovery.',
   };
 }
 
@@ -619,44 +426,9 @@ export async function searchYouTubeVideos(options: {
 
   const maxResults = Math.min(Math.max(Number(options.maxResults) || 16, 1), 25);
   const order = options.order || 'relevance';
-  const apiKeyConfigured = Boolean(getApiKey());
-  const cacheKey = `search:${apiKeyConfigured ? 'v3' : 'web'}:${cleanQuery.toLowerCase()}:${maxResults}:${options.pageToken || ''}:${options.categoryId || ''}:${order}`;
+  const cacheKey = `search:nokey:${cleanQuery.toLowerCase()}:${maxResults}:${order}`;
   const cached = getCached<any>(cacheKey);
   if (cached) return cached;
-
-  if (apiKeyConfigured) {
-    const searchData = await ytFetch('search', {
-      part: 'snippet',
-      type: 'video',
-      q: cleanQuery,
-      maxResults,
-      pageToken: options.pageToken,
-      videoCategoryId: options.categoryId,
-      videoEmbeddable: 'true',
-      safeSearch: 'moderate',
-      order,
-    });
-
-    const rawItems = Array.isArray(searchData?.items) ? searchData.items : [];
-    const ids = rawItems.map((it: any) => it?.id?.videoId).filter(Boolean);
-    const enriched = await enrichVideoIds(ids);
-
-    const enrichedById = new Map(enriched.map((v) => [v.id, v]));
-    const ordered: YouTubeVideoItem[] = ids
-      .map((id: string) => enrichedById.get(id))
-      .filter((v: YouTubeVideoItem | undefined): v is YouTubeVideoItem => Boolean(v && v.embeddable));
-
-    const payload = {
-      videos: ordered,
-      nextPageToken: searchData?.nextPageToken || null,
-      totalResults: Number(searchData?.pageInfo?.totalResults || ordered.length),
-      query: cleanQuery,
-      mode: 'youtube_data_api_v3',
-    };
-
-    setCached(cacheKey, payload, 5 * 60 * 1000);
-    return payload;
-  }
 
   const videos = await searchYouTubePublicWeb(cleanQuery, maxResults, order);
   const payload = {
@@ -664,7 +436,7 @@ export async function searchYouTubeVideos(options: {
     nextPageToken: null,
     totalResults: videos.length,
     query: cleanQuery,
-    mode: 'youtube_web_discovery',
+    mode: 'keyless_iframe_player',
   };
   setCached(cacheKey, payload, 5 * 60 * 1000);
   return payload;
@@ -672,16 +444,16 @@ export async function searchYouTubeVideos(options: {
 
 const SECTION_CONFIG: Record<
   YouTubeBrowseSection,
-  { label: string; categoryId?: string; fallbackQuery: string }
+  { label: string; query: string }
 > = {
-  trending: { label: 'Trending', fallbackQuery: 'trending popular videos 2026' },
-  music: { label: 'Music', categoryId: '10', fallbackQuery: 'official music video acoustic performance' },
-  education: { label: 'Educational', categoryId: '27', fallbackQuery: 'science documentary educational lecture explained' },
-  science_tech: { label: 'Science & Tech', categoryId: '28', fallbackQuery: 'science engineering technology breakthrough' },
-  entertainment: { label: 'Entertainment', categoryId: '24', fallbackQuery: 'cinema film animation comedy showcase' },
-  gaming: { label: 'Gaming', categoryId: '20', fallbackQuery: 'gaming gameplay showcase review' },
-  news: { label: 'News', categoryId: '25', fallbackQuery: 'world news analysis live briefing' },
-  sports: { label: 'Sports', categoryId: '17', fallbackQuery: 'sports highlights championship match' },
+  trending: { label: 'Trending', query: 'trending popular videos' },
+  music: { label: 'Music', query: 'official music video acoustic performance' },
+  education: { label: 'Educational', query: 'science documentary educational lecture explained' },
+  science_tech: { label: 'Science & Tech', query: 'science engineering technology breakthrough' },
+  entertainment: { label: 'Entertainment', query: 'cinema film animation comedy showcase' },
+  gaming: { label: 'Gaming', query: 'gaming gameplay showcase review' },
+  news: { label: 'News', query: 'world news analysis live briefing' },
+  sports: { label: 'Sports', query: 'sports highlights championship match' },
 };
 
 export async function browseYouTubeCategory(options: {
@@ -698,65 +470,20 @@ export async function browseYouTubeCategory(options: {
 }> {
   const section: YouTubeBrowseSection = SECTION_CONFIG[options.section] ? options.section : 'trending';
   const cfg = SECTION_CONFIG[section];
-  const regionCode = (options.regionCode || process.env.YOUTUBE_REGION_CODE || 'US').toUpperCase();
+  const regionCode = (options.regionCode || 'US').toUpperCase();
   const maxResults = Math.min(Math.max(Number(options.maxResults) || 16, 1), 25);
-  const apiKeyConfigured = Boolean(getApiKey());
 
-  const cacheKey = `browse:${apiKeyConfigured ? 'v3' : 'web'}:${section}:${regionCode}:${maxResults}:${options.pageToken || ''}`;
+  const cacheKey = `browse:nokey:${section}:${regionCode}:${maxResults}`;
   const cached = getCached<any>(cacheKey);
   if (cached) return cached;
 
-  let videos: YouTubeVideoItem[] = [];
-  let nextPageToken: string | null = null;
-
-  if (apiKeyConfigured) {
-    try {
-      const data = await ytFetch('videos', {
-        part: 'snippet,contentDetails,statistics,status',
-        chart: 'mostPopular',
-        regionCode,
-        videoCategoryId: cfg.categoryId,
-        maxResults,
-        pageToken: options.pageToken,
-      });
-      const items = Array.isArray(data?.items) ? data.items : [];
-      videos = items
-        .map(mapVideoResource)
-        .filter((v: YouTubeVideoItem) => v.embeddable && v.privacyStatus !== 'private');
-      nextPageToken = data?.nextPageToken || null;
-    } catch (err: any) {
-      if (
-        err instanceof YouTubeServiceError &&
-        (err.code === 'YOUTUBE_QUOTA_EXCEEDED' ||
-          err.code === 'YOUTUBE_API_AUTH_ERROR' ||
-          err.code === 'YOUTUBE_API_REFERRER_BLOCKED' ||
-          err.code === 'YOUTUBE_API_DISABLED')
-      ) {
-        throw err;
-      }
-    }
-
-    if (videos.length === 0) {
-      const fallback = await searchYouTubeVideos({
-        query: cfg.fallbackQuery,
-        categoryId: cfg.categoryId,
-        maxResults,
-        pageToken: options.pageToken,
-        order: 'viewCount',
-      });
-      videos = fallback.videos;
-      nextPageToken = fallback.nextPageToken;
-    }
-  } else {
-    videos = await searchYouTubePublicWeb(cfg.fallbackQuery, maxResults, 'relevance');
-  }
-
+  const videos = await searchYouTubePublicWeb(cfg.query, maxResults, 'relevance', regionCode);
   const payload = {
     section,
     label: cfg.label,
     videos,
-    nextPageToken,
-    mode: apiKeyConfigured ? 'youtube_data_api_v3' : 'youtube_web_discovery',
+    nextPageToken: null,
+    mode: 'keyless_iframe_player',
   };
 
   setCached(cacheKey, payload, 10 * 60 * 1000);
@@ -766,43 +493,12 @@ export async function browseYouTubeCategory(options: {
 export async function getYouTubeVideoDetails(videoId: string): Promise<YouTubeVideoItem> {
   const cleanId = (videoId || '').trim();
   if (!/^[a-zA-Z0-9_-]{11}$/.test(cleanId)) {
-    throw new YouTubeServiceError('Invalid YouTube video ID.', 400, 'INVALID_VIDEO_ID', true);
+    throw new YouTubeServiceError('Invalid YouTube video ID. A valid ID is 11 characters.', 400, 'INVALID_VIDEO_ID', true);
   }
 
-  const apiKeyConfigured = Boolean(getApiKey());
-  const cacheKey = `video:${apiKeyConfigured ? 'v3' : 'oembed'}:${cleanId}`;
+  const cacheKey = `video:oembed:${cleanId}`;
   const cached = getCached<YouTubeVideoItem>(cacheKey);
   if (cached) return cached;
-
-  if (apiKeyConfigured) {
-    const data = await ytFetch('videos', {
-      part: 'snippet,contentDetails,statistics,status',
-      id: cleanId,
-    });
-
-    const raw = Array.isArray(data?.items) ? data.items[0] : null;
-    if (!raw) {
-      throw new YouTubeServiceError(
-        'This video is unavailable, deleted, or private on YouTube.',
-        404,
-        'VIDEO_UNAVAILABLE',
-        true
-      );
-    }
-
-    const mapped = mapVideoResource(raw);
-    if (mapped.privacyStatus === 'private') {
-      throw new YouTubeServiceError(
-        'This video is private on YouTube and cannot be played.',
-        403,
-        'VIDEO_PRIVATE',
-        true
-      );
-    }
-
-    setCached(cacheKey, mapped, 10 * 60 * 1000);
-    return mapped;
-  }
 
   const oembedVideo = await fetchYouTubeOEmbed(cleanId);
   setCached(cacheKey, oembedVideo, 10 * 60 * 1000);
@@ -818,7 +514,7 @@ export async function getRelatedYouTubeVideos(videoId: string): Promise<{
     throw new YouTubeServiceError('Invalid YouTube video ID.', 400, 'INVALID_VIDEO_ID', true);
   }
 
-  const cacheKey = `related:${Boolean(getApiKey()) ? 'v3' : 'web'}:${cleanId}`;
+  const cacheKey = `related:nokey:${cleanId}`;
   const cached = getCached<any>(cacheKey);
   if (cached) return cached;
 
@@ -835,17 +531,20 @@ export async function getRelatedYouTubeVideos(videoId: string): Promise<{
     .join(' ');
 
   const searchQuery = [cleanedKeywords, source.channelTitle].filter(Boolean).join(' ').trim() || source.title;
-  const searchResult = await searchYouTubeVideos({
-    query: searchQuery,
-    categoryId: source.categoryId,
-    maxResults: 12,
-    order: 'relevance',
-  });
+  try {
+    const searchResult = await searchYouTubeVideos({
+      query: searchQuery,
+      maxResults: 12,
+      order: 'relevance',
+    });
 
-  const related = searchResult.videos.filter((v) => v.id !== cleanId).slice(0, 10);
-  const payload = { videos: related, sourceVideoId: cleanId };
-  setCached(cacheKey, payload, 10 * 60 * 1000);
-  return payload;
+    const related = searchResult.videos.filter((v) => v.id !== cleanId).slice(0, 10);
+    const payload = { videos: related, sourceVideoId: cleanId };
+    setCached(cacheKey, payload, 10 * 60 * 1000);
+    return payload;
+  } catch {
+    return { videos: [], sourceVideoId: cleanId };
+  }
 }
 
 export async function getYouTubeSearchSuggestions(query: string): Promise<string[]> {
