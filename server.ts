@@ -1394,7 +1394,10 @@ app.get('/api/ai/tts', async (req, res) => {
         return res.send(audioBuf);
       }
     } catch (geminiTtsErr: any) {
-      console.warn('[TTS] Gemini TTS unavailable, using fallback:', geminiTtsErr?.message || geminiTtsErr);
+      const msg = String(geminiTtsErr?.message || geminiTtsErr);
+      if (!msg.includes('429') && !msg.includes('RESOURCE_EXHAUSTED')) {
+        console.warn('[TTS] Gemini TTS unavailable, using fallback:', msg);
+      }
     }
 
     // 2. Reliable Fallback: Google Translate TTS MP3
