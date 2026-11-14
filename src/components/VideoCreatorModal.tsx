@@ -141,11 +141,26 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
   const [copiedId, setCopiedId] = useState<boolean>(false);
   const [autoplayOnLoad, setAutoplayOnLoad] = useState<boolean>(false);
   const [dismissKeyNotice, setDismissKeyNotice] = useState<boolean>(false);
+  const [iframeApiFallback, setIframeApiFallback] = useState<boolean>(false);
 
   const ytPlayerRef = useRef<any>(null);
+  const ytPlayerReadyRef = useRef<boolean>(false);
+  const playerHostRef = useRef<HTMLDivElement | null>(null);
+  const playerStageRef = useRef<HTMLDivElement | null>(null);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
   const stateLoadedRef = useRef<boolean>(false);
   const initialVideoSelectedRef = useRef<boolean>(false);
+  const userStateRef = useRef<{
+    favorites: YouTubeVideoItem[];
+    history: YouTubeVideoItem[];
+    recent_searches: string[];
+    theme: 'dark' | 'light';
+  }>({
+    favorites: [],
+    history: [],
+    recent_searches: [],
+    theme: 'dark',
+  });
 
   // Keep user state isolated on Firebase Auth sign-in/sign-out changes
   useEffect(() => {
@@ -160,6 +175,7 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     stateLoadedRef.current = false;
     loadYouTubeUserState(activeUid).then(({ state, syncedToCloud }) => {
       if (cancelled) return;
+      userStateRef.current = state;
       setFavorites(state.favorites);
       setHistory(state.history);
       setRecentSearches(state.recent_searches);
@@ -180,16 +196,17 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       theme?: 'dark' | 'light';
     }) => {
       const payload = {
-        favorites: next.favorites ?? favorites,
-        history: next.history ?? history,
-        recent_searches: next.recent_searches ?? recentSearches,
-        theme: next.theme ?? theme,
+        favorites: next.favorites ?? userStateRef.current.favorites,
+        history: next.history ?? userStateRef.current.history,
+        recent_searches: next.recent_searches ?? userStateRef.current.recent_searches,
+        theme: next.theme ?? userStateRef.current.theme,
       };
+      userStateRef.current = payload;
       saveYouTubeUserState(payload, activeUid).then((synced) => {
         setCloudSynced(synced);
       });
     },
-    [favorites, history, recentSearches, theme, activeUid]
+    [activeUid]
   );
 
   // Close suggestions dropdown on outside click
@@ -294,57 +311,118 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
     };
   }, [currentVideo?.id]);
 
-  // Attach official YouTube IFrame Player API to the rendered official embed iframe
+  const destroyYouTubePlayer = useCallback(() => {
+    ytPlayerReadyRef.current = false;
+    if (ytPlayerRef.current) {
+      try {
+        ytPlayerRef.current.destroy();
+      } catch {}
+      ytPlayerRef.current = null;
+    }
+    if (playerHostRef.current) {
+      playerHostRef.current.innerHTML = '';
+    }
+  }, []);
+
+  // Mount & control official YouTube IFrame Player API cleanly
   useEffect(() => {
     if (!currentVideo) {
-      if (ytPlayerRef.current) {
-        try {
-          ytPlayerRef.current.destroy();
-        } catch {}
-        ytPlayerRef.current = null;
-      }
+      destroyYouTubePlayer();
+      setIframeApiFallback(false);
       return;
     }
 
     if (currentVideo.embeddable === false) {
+      destroyYouTubePlayer();
       setPlayerError('The video owner has disabled embedded playback outside YouTube.');
       return;
     }
 
-    let cancelled = false;
     setPlayerError(null);
+
+    // Fast path: switch video inside an already-ready YT.Player instance
+    if (!iframeApiFallback && ytPlayerRef.current && ytPlayerReadyRef.current) {
+      try {
+        if (autoplayOnLoad && typeof ytPlayerRef.current.loadVideoById === 'function') {
+          ytPlayerRef.current.loadVideoById(currentVideo.id);
+          setPlayerReady(true);
+          return;
+        }
+        if (!autoplayOnLoad && typeof ytPlayerRef.current.cueVideoById === 'function') {
+          ytPlayerRef.current.cueVideoById(currentVideo.id);
+          setPlayerReady(true);
+          return;
+        }
+      } catch {
+        destroyYouTubePlayer();
+      }
+    }
+
+    if (iframeApiFallback) {
+      setPlayerReady(false);
+      return;
+    }
+
+    let cancelled = false;
     setPlayerReady(false);
+    destroyYouTubePlayer();
 
-    // Ensure loading overlay never gets stuck if iframe_api takes time or is blocked
     const readyFallbackTimer = window.setTimeout(() => {
-      if (!cancelled) setPlayerReady(true);
-    }, 2200);
+      if (!cancelled && !ytPlayerReadyRef.current) {
+        setPlayerReady(true);
+      }
+    }, 3500);
 
-    const iframeId = `ishai-yt-iframe-${currentVideo.id}`;
     loadYouTubeIframeAPI()
       .then((YT) => {
-        if (cancelled) return;
-        const iframeEl = document.getElementById(iframeId);
-        if (!iframeEl) return;
+        if (cancelled || !playerHostRef.current) return;
 
-        if (ytPlayerRef.current) {
-          try {
-            ytPlayerRef.current.destroy();
-          } catch {}
-          ytPlayerRef.current = null;
-        }
+        const mountEl = document.createElement('div');
+        mountEl.className = 'w-full h-full';
+        playerHostRef.current.innerHTML = '';
+        playerHostRef.current.appendChild(mountEl);
 
-        ytPlayerRef.current = new YT.Player(iframeId, {
+        const httpOrigin =
+          typeof window !== 'undefined' && window.location.origin.startsWith('http')
+            ? window.location.origin
+            : undefined;
+
+        ytPlayerRef.current = new YT.Player(mountEl, {
+          videoId: currentVideo.id,
+          width: '100%',
+          height: '100%',
+          playerVars: {
+            autoplay: autoplayOnLoad ? 1 : 0,
+            controls: 1,
+            fs: 1,
+            rel: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            enablejsapi: 1,
+            ...(httpOrigin ? { origin: httpOrigin } : {}),
+          },
           events: {
-            onReady: () => {
-              if (!cancelled) {
-                window.clearTimeout(readyFallbackTimer);
-                setPlayerReady(true);
-              }
+            onReady: (event: any) => {
+              if (cancelled) return;
+              window.clearTimeout(readyFallbackTimer);
+              ytPlayerReadyRef.current = true;
+              setPlayerReady(true);
+              try {
+                const iframe = event?.target?.getIframe?.();
+                if (iframe) {
+                  iframe.setAttribute('allowfullscreen', 'true');
+                  iframe.setAttribute(
+                    'allow',
+                    'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen'
+                  );
+                  iframe.className = 'w-full h-full border-0';
+                }
+              } catch {}
             },
             onError: (event: any) => {
               if (!cancelled) {
                 window.clearTimeout(readyFallbackTimer);
+                setPlayerReady(true);
                 setPlayerError(getYouTubeErrorDescription(Number(event?.data)));
               }
             },
@@ -352,27 +430,25 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
         });
       })
       .catch(() => {
-        // Native official YouTube embed iframe remains fully playable
-        if (!cancelled) setPlayerReady(true);
+        if (!cancelled) {
+          window.clearTimeout(readyFallbackTimer);
+          setIframeApiFallback(true);
+          setPlayerReady(true);
+        }
       });
 
     return () => {
       cancelled = true;
       window.clearTimeout(readyFallbackTimer);
     };
-  }, [currentVideo?.id, currentVideo?.embeddable]);
+  }, [currentVideo?.id, currentVideo?.embeddable, autoplayOnLoad, iframeApiFallback, destroyYouTubePlayer]);
 
   // Full cleanup on unmount
   useEffect(() => {
     return () => {
-      if (ytPlayerRef.current) {
-        try {
-          ytPlayerRef.current.destroy();
-        } catch {}
-        ytPlayerRef.current = null;
-      }
+      destroyYouTubePlayer();
     };
-  }, []);
+  }, [destroyYouTubePlayer]);
 
   const recordWatchedVideo = useCallback(
     (video: YouTubeVideoItem) => {
@@ -380,11 +456,9 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
         ...video,
         watchedAt: new Date().toISOString(),
       };
-      setHistory((prev) => {
-        const updated = [entry, ...prev.filter((item) => item.id !== video.id)].slice(0, 100);
-        persistUserState({ history: updated });
-        return updated;
-      });
+      const updated = [entry, ...userStateRef.current.history.filter((item) => item.id !== video.id)].slice(0, 100);
+      setHistory(updated);
+      persistUserState({ history: updated });
     },
     [persistUserState]
   );
@@ -396,7 +470,11 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
       setShowFullDesc(false);
       if (currentVideo?.id === video.id) {
         try {
-          ytPlayerRef.current?.playVideo?.();
+          if (ytPlayerRef.current && ytPlayerReadyRef.current) {
+            ytPlayerRef.current.playVideo?.();
+          } else {
+            setAutoplayOnLoad(true);
+          }
         } catch {}
       } else {
         setAutoplayOnLoad(true);
@@ -819,27 +897,35 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
 
           {/* Active Video Player + Related Videos Section */}
           {currentVideo && (
-            <section className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.75fr)_minmax(290px,1fr)] gap-5 items-start">
+            <section
+              className={`grid grid-cols-1 gap-5 items-start ${
+                theaterMode ? '' : 'lg:grid-cols-[minmax(0,1.75fr)_minmax(290px,1fr)]'
+              }`}
+            >
               {/* Main Video Stage */}
               <div className={`rounded-2xl border overflow-hidden ${bgSurface}`}>
-                <div className="relative w-full aspect-video bg-black">
-                  <iframe
-                    key={currentVideo.id}
-                    id={`ishai-yt-iframe-${currentVideo.id}`}
-                    src={`https://www.youtube.com/embed/${encodeURIComponent(
-                      currentVideo.id
-                    )}?enablejsapi=1&autoplay=${autoplayOnLoad ? 1 : 0}&controls=1&fs=1&rel=0&modestbranding=1&playsinline=1${
-                      typeof window !== 'undefined' && window.location.origin.startsWith('http')
-                        ? `&origin=${encodeURIComponent(window.location.origin)}`
-                        : ''
-                    }`}
-                    title={currentVideo.title}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
-                    allowFullScreen
-                    referrerPolicy="strict-origin-when-cross-origin"
-                    onLoad={() => setPlayerReady(true)}
-                    className="w-full h-full border-0"
-                  />
+                <div ref={playerStageRef} className="relative w-full aspect-video bg-black">
+                  {iframeApiFallback ? (
+                    <iframe
+                      key={currentVideo.id}
+                      id={`ishai-yt-iframe-${currentVideo.id}`}
+                      src={`https://www.youtube.com/embed/${encodeURIComponent(
+                        currentVideo.id
+                      )}?enablejsapi=1&autoplay=${autoplayOnLoad ? 1 : 0}&controls=1&fs=1&rel=0&modestbranding=1&playsinline=1${
+                        typeof window !== 'undefined' && window.location.origin.startsWith('http')
+                          ? `&origin=${encodeURIComponent(window.location.origin)}`
+                          : ''
+                      }`}
+                      title={currentVideo.title}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                      allowFullScreen
+                      referrerPolicy="strict-origin-when-cross-origin"
+                      onLoad={() => setPlayerReady(true)}
+                      className="w-full h-full border-0"
+                    />
+                  ) : (
+                    <div ref={playerHostRef} className="w-full h-full" />
+                  )}
 
                   {!playerReady && !playerError && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/75 text-white gap-2 pointer-events-none">
@@ -855,13 +941,27 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
                       <AlertTriangle className="w-9 h-9 text-amber-400" />
                       <h4 className="text-sm sm:text-base font-bold">Video Playback Unavailable</h4>
                       <p className="text-xs sm:text-sm text-zinc-300 max-w-md">{playerError}</p>
-                      <button
-                        type="button"
-                        onClick={() => setCurrentVideo(null)}
-                        className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold cursor-pointer"
-                      >
-                        Close Player
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlayerError(null);
+                            setIframeApiFallback(false);
+                            destroyYouTubePlayer();
+                            setCurrentVideo({ ...currentVideo });
+                          }}
+                          className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-semibold cursor-pointer"
+                        >
+                          Retry Player
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCurrentVideo(null)}
+                          className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold cursor-pointer"
+                        >
+                          Close Player
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -924,9 +1024,27 @@ export const YouTubePlayerModal: React.FC<YouTubePlayerModalProps> = ({
 
                       <button
                         type="button"
+                        onClick={() => {
+                          const stage = playerStageRef.current;
+                          if (!stage) return;
+                          if (document.fullscreenElement) {
+                            document.exitFullscreen?.().catch(() => {});
+                          } else {
+                            stage.requestFullscreen?.().catch(() => {});
+                          }
+                        }}
+                        className={`px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle}`}
+                        title="Toggle player fullscreen"
+                      >
+                        <Tv className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Fullscreen</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => setTheaterMode((t) => !t)}
                         className={`px-3 py-2 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${bgSubtle}`}
-                        title={theaterMode ? 'Default size' : 'Expand workspace'}
+                        title={theaterMode ? 'Default layout' : 'Theater layout'}
                       >
                         {theaterMode ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
                         <span className="hidden sm:inline">{theaterMode ? 'Compact' : 'Expand'}</span>

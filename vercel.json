@@ -9,6 +9,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/youtube/:path*",
+      "destination": "/api/youtube?__yt_path=:path*"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/index"
     },

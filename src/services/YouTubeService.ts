@@ -269,9 +269,9 @@ function sanitizeVideoForStorage(v: YouTubeVideoItem): YouTubeVideoItem {
     publishedAt: String(v.publishedAt || '').slice(0, 64),
     duration: String(v.duration || '').slice(0, 24),
     viewCount: String(v.viewCount || '').slice(0, 40),
-    likeCount: v.likeCount ? String(v.likeCount).slice(0, 32) : undefined,
-    categoryId: v.categoryId ? String(v.categoryId).slice(0, 16) : undefined,
     embeddable: v.embeddable !== false,
+    ...(v.likeCount ? { likeCount: String(v.likeCount).slice(0, 32) } : {}),
+    ...(v.categoryId ? { categoryId: String(v.categoryId).slice(0, 16) } : {}),
     ...(v.watchedAt ? { watchedAt: String(v.watchedAt).slice(0, 64) } : {}),
   };
 }

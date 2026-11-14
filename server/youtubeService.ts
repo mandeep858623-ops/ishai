@@ -60,7 +60,12 @@ const MAX_CACHE_ENTRIES = 250;
 const responseCache = new Map<string, CacheEntry<any>>();
 
 function getApiKey(): string {
-  return (process.env.YOUTUBE_API_KEY || process.env.GOOGLE_YOUTUBE_API_KEY || '').trim();
+  return (
+    process.env.YOUTUBE_API_KEY ||
+    process.env.GOOGLE_YOUTUBE_API_KEY ||
+    process.env.YOUTUBE_DATA_API_KEY ||
+    ''
+  ).trim();
 }
 
 function getCached<T>(key: string): T | null {
@@ -500,18 +505,20 @@ async function searchYouTubePublicWeb(
     innertubeErr = err;
   }
 
+  let parsedHtmlData = false;
   try {
     const htmlResult = await searchYouTubeResultsHtml(query, maxResults, order);
-    if (htmlResult.videos.length > 0 || htmlResult.parsedInitialData) {
+    parsedHtmlData = htmlResult.parsedInitialData;
+    if (htmlResult.videos.length > 0 || parsedHtmlData) {
       return htmlResult.videos;
     }
   } catch (htmlErr) {
     if (!innertubeErr) innertubeErr = htmlErr;
   }
 
-  if (innertubeErr) {
+  if (innertubeErr || !parsedHtmlData) {
     throw new YouTubeServiceError(
-      'YouTube blocked unauthenticated search from this server IP. Add YOUTUBE_API_KEY in Vercel Environment Variables to enable official YouTube Data API v3 search.',
+      'YouTube blocked unauthenticated search from this server IP. Add YOUTUBE_API_KEY in Vercel Environment Variables and redeploy to use the official YouTube Data API v3.',
       503,
       'YOUTUBE_API_KEY_MISSING',
       false,
